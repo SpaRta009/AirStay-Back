@@ -1,0 +1,2 @@
+New-Item -Path "nixpacks.toml" -ItemType File
+Add-Content -Path "nixpacks.toml" -Value "[phases.setup]`naptPkgs = ['gdal-bin', 'libgdal-dev', 'python3-gdal', 'binutils', 'libproj-dev']"
