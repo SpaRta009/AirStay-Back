@@ -1,3 +1,1 @@
-web: gunicorn airbnb.wsgi --log-file -
-Set-Content -Path "Procfile" -Value "web: gunicorn AirBNB.wsgi --log-file -"
-cat Procfile
+web: gunicorn AirBNB.wsgi:application --bind 0.0.0.0:$PORT
