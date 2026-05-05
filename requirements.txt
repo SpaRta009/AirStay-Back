@@ -10,7 +10,7 @@ djangorestframework-gis==1.2.0
 gunicorn==23.0.0
 packaging==25.0
 pillow==10.4.0
-psycopg2-binary @ file:///C:/Users/21369/Downloads/psycopg2_binary-2.8.5-cp38-cp38-win_amd64.whl#sha256=fa2050a4b95cf68930710de2c2a6a8b140125177930ca596164fc51e77b68865
+psycopg2-binary>=2.9
 python-dotenv==1.0.1
 sqlparse==0.5.4
 typing_extensions==4.13.2
