@@ -2,13 +2,26 @@ from pathlib import Path
 import os
 import dj_database_url
 
+# === GeoDjango / GDAL Setup ===
+import os
+import ctypes
+
+# Chemin vers la DLL GDAL dans ton venv
+GDAL_DLL_PATH = r"D:\AirBNB\.venv\Lib\site-packages\osgeo\gdal304.dll"
+
+# Forcer le chargement de la DLL avant tout import Django
+ctypes.CDLL(GDAL_DLL_PATH)
+
+# Indiquer à Django où trouver GDAL
+GDAL_LIBRARY_PATH = GDAL_DLL_PATH
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Secrets et debug
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-default-key")
-DEBUG = os.getenv("DEBUG", "False") == "True"
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",") or ["*"]
+DEBUG = True
 
+ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
 
 # Applications
 INSTALLED_APPS = [
@@ -19,6 +32,8 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'django.contrib.gis',
+    "corsheaders",
+    "rest_framework.authtoken",
 
     # 3rd party
     'django_cleanup.apps.CleanupConfig',
@@ -38,6 +53,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    "corsheaders.middleware.CorsMiddleware",
+    "django.middleware.common.CommonMiddleware",
 ]
 
 ROOT_URLCONF = 'AirBNB.urls'
@@ -62,7 +79,14 @@ WSGI_APPLICATION = 'AirBNB.wsgi.application'
 
 # Base de données
 DATABASES = {
-    'default': dj_database_url.config(conn_max_age=600, ssl_require=True)
+    'default': {
+        'ENGINE': 'django.contrib.gis.db.backends.postgis',
+        'NAME': 'AirBNB',
+        'USER': 'MReus',
+        'PASSWORD': 'ikzera13',
+        'HOST': 'localhost',
+        'PORT': '5432',
+    }
 }
 
 
@@ -85,7 +109,7 @@ USE_TZ = True
 # Static / Media
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
-STATICFILES_DIRS = [os.path.join(BASE_DIR, "static")]
+#STATICFILES_DIRS = [os.path.join(BASE_DIR, "static")]
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
@@ -94,12 +118,26 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # DRF
 REST_FRAMEWORK = {
-    'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticatedOrReadOnly',
-    ]
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.TokenAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.AllowAny",   # public par défaut
+    ],
 }
 
 CSRF_TRUSTED_ORIGINS = os.getenv(
     "CSRF_TRUSTED_ORIGINS",
     "https://*.onrender.com"
 ).split(",")
+
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+]
+
+SESSION_ENGINE = "django.contrib.sessions.backends.db"
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+]
