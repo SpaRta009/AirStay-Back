@@ -14,9 +14,9 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-    ('auth', '0012_alter_user_first_name_max_length'),
-    ('backEnd', '0000_postgis'),
-]
+        ('auth', '0012_alter_user_first_name_max_length'),
+        # ← plus de référence à 0000_postgis
+    ]
 
     operations = [
         migrations.CreateModel(
