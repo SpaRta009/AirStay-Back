@@ -26,6 +26,7 @@ class PropertyList(generics.ListCreateAPIView):
     queryset = Property.objects.filter(active=True)
     serializer_class = PropertySerializer
     name = 'properties-list'
+    permission_classes = [IsAuthenticated]  # 👈 AJOUT
 
 class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
     queryset = Property.objects.filter(active=True)
