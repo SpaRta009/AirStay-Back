@@ -52,7 +52,7 @@ class CityList(generics.ListAPIView):
 
         # 2. search cities (IMPORTANT pour ton frontend)
         if search:
-            return qs.filter(name__icontains=search)
+            return qs.filter(city_name__icontains=search)
 
         # 3. fallback (évite 404)
         return qs[:10]
