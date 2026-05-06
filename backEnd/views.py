@@ -38,14 +38,24 @@ class CityList(generics.ListAPIView):
     name = "cities-list"
 
     def get_queryset(self):
+        qs = City.objects.all()
+
         property_id = self.request.query_params.get("propertyid")
-        if property_id is None:
-            raise Http404("propertyid query parameter is required.")
-        selected_property_geom = get_object_or_404(Property, pk=property_id).point_geom
-        nearest_cities = City.objects.annotate(
-            distance=Distance("point_geom", selected_property_geom)
-        ).order_by("distance")[:3]
-        return nearest_cities
+        search = self.request.query_params.get("search")
+
+        # 1. nearest cities (si propertyid)
+        if property_id:
+            prop = get_object_or_404(Property, pk=property_id)
+            return City.objects.annotate(
+                distance=Distance("point_geom", prop.point_geom)
+            ).order_by("distance")[:3]
+
+        # 2. search cities (IMPORTANT pour ton frontend)
+        if search:
+            return qs.filter(name__icontains=search)
+
+        # 3. fallback (évite 404)
+        return qs[:10]
 
 # ---- Auth ----
 @api_view(['POST'])
