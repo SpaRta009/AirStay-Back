@@ -22,7 +22,7 @@ class CategoryDetail(generics.RetrieveUpdateDestroyAPIView):
     name = 'category-detail'
 
 # ---- Properties ----
-class PropertyList(generics.ListAPIView):
+class PropertyList(generics.ListCreateAPIView):
     queryset = Property.objects.filter(active=True)
     serializer_class = PropertySerializer
     name = 'properties-list'
@@ -33,29 +33,38 @@ class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
     name = 'properties-detail'
 
 # ---- Cities ----
+
 class CityList(generics.ListAPIView):
     serializer_class = CitySerializer
-    name = "cities-list"
 
     def get_queryset(self):
         qs = City.objects.all()
-
-        property_id = self.request.query_params.get("propertyid")
         search = self.request.query_params.get("search")
 
-        # 1. nearest cities (si propertyid)
-        if property_id:
-            prop = get_object_or_404(Property, pk=property_id)
-            return City.objects.annotate(
-                distance=Distance("point_geom", prop.point_geom)
-            ).order_by("distance")[:3]
-
-        # 2. search cities (IMPORTANT pour ton frontend)
         if search:
             return qs.filter(city_name__icontains=search)
 
-        # 3. fallback (évite 404)
         return qs[:10]
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+
+        # format propre pour ton frontend
+        return Response({
+            "features": [
+                {
+                    "properties": {
+                        "pk": obj.id,
+                        "city_name": obj.city_name,
+                    },
+                    "geometry": {
+                        "coordinates": [obj.point_geom.x, obj.point_geom.y] if obj.point_geom else [0, 0]
+                    }
+                }
+                for obj in queryset
+            ]
+        })
 
 # ---- Auth ----
 @api_view(['POST'])
