@@ -9,6 +9,8 @@ urlpatterns = [
     path("properties/", views.PropertyList.as_view(), name=views.PropertyList.name),
     path("properties/<int:pk>/", views.PropertyDetail.as_view(), name=views.PropertyDetail.name),
     path("cities/", views.CityList.as_view(), name=views.CityList.name),
+    path("auth/register/", views.register, name="register"),
+    path("auth/login/", views.login_view, name="login"),
     path("api-auth/", include("rest_framework.urls")),
 ]
 
