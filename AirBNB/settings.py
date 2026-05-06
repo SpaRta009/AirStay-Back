@@ -85,13 +85,12 @@ WSGI_APPLICATION = 'AirBNB.wsgi.application'
 if os.environ.get('DATABASE_URL'):
     # Railway → PostgreSQL + PostGIS
     DATABASES = {
-    'default': dj_database_url.config(
-        default=os.environ.get('DATABASE_URL'),
-        conn_max_age=600,
-    )
-}
-
-    DATABASES['default']['ENGINE'] = 'django.contrib.gis.db.backends.postgis'
+        'default': dj_database_url.config(
+            default=os.environ.get('DATABASE_URL'),
+            conn_max_age=600,
+            engine='django.contrib.gis.db.backends.postgis',
+        )
+    }
 else:
     # Local → ta config PostgreSQL locale
     DATABASES = {
