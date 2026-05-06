@@ -1,7 +1,7 @@
 from .models import Property, Category, City, User
 from .serializers import CategorySerializer, CitySerializer, PropertySerializer
 from rest_framework import generics
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
@@ -9,7 +9,6 @@ from django.contrib.auth import authenticate
 from django.http import Http404
 from django.contrib.gis.db.models.functions import Distance
 from django.shortcuts import get_object_or_404
-
 # ---- Categories ----
 class CategoryList(generics.ListCreateAPIView):
     queryset = Category.objects.all()
@@ -26,7 +25,7 @@ class PropertyList(generics.ListCreateAPIView):
     queryset = Property.objects.filter(active=True)
     serializer_class = PropertySerializer
     name = 'properties-list'
-    permission_classes = [IsAuthenticated]  # 👈 AJOUT
+    permission_classes = [IsAuthenticatedOrReadOnly]  # 👈 AJOUT
 
 class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
     queryset = Property.objects.filter(active=True)
