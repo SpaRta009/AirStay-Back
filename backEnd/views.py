@@ -98,30 +98,23 @@ def register(request):
 def login_view(request):
     email = request.data.get('email')
     password = request.data.get('password')
-
-    if not email or not password:
-        return Response({'error': 'Missing credentials'}, status=400)
-
     try:
-        user = User.objects.get(email=email)
+        user_obj = User.objects.get(email=email)
+        user = authenticate(username=user_obj.username, password=password)
+        if user:
+            token, _ = Token.objects.get_or_create(user=user)
+            return Response({
+                'token': token.key,
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                    'role': user.role,
+                    'firstName': user.first_name,
+                    'lastName': user.last_name,
+                    'phone': user.phone_number,
+                }
+            })
+        return Response({'error': 'Invalid credentials'}, status=400)
     except User.DoesNotExist:
         return Response({'error': 'Invalid credentials'}, status=400)
-
-    auth_user = authenticate(username=user.username, password=password)
-
-    if auth_user:
-        token, _ = Token.objects.get_or_create(user=auth_user)
-        return Response({
-            'token': token.key,
-            'user': {
-                'id': auth_user.id,
-                'username': auth_user.username,
-                'email': auth_user.email,
-                'role': auth_user.role,
-                'firstName': auth_user.first_name,
-                'lastName': auth_user.last_name,
-                'phone': auth_user.phone_number,
-            }
-        })
-
-    return Response({'error': 'Invalid credentials'}, status=400)
