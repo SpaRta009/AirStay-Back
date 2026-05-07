@@ -3,17 +3,24 @@ from django.contrib.gis.db import models as gis_models
 from django.contrib.auth.models import AbstractUser
 from django.forms import ValidationError
 
-# Create your models here.
+
 class User(AbstractUser):
     second_name = models.CharField(max_length=30, blank=True, null=True)
-    phone_number = models.CharField(max_length=15, unique=True)
-    role = models.CharField(max_length=20, choices=[('guest', 'Guest'), ('host', 'Host')], default='guest')
+    # ✅ FIX : blank=True + null=True pour que le téléphone soit optionnel
+    # unique=True reste mais PostgreSQL accepte plusieurs NULL (contrairement aux "")
+    phone_number = models.CharField(max_length=15, unique=True, blank=True, null=True)
+    role = models.CharField(
+        max_length=20,
+        choices=[('guest', 'Guest'), ('host', 'Host')],
+        default='guest'
+    )
 
     class Meta:
         verbose_name_plural = 'Users'
 
     def __str__(self):
         return self.username
+
 
 class Category(models.Model):
     category_name = models.CharField(max_length=50, help_text='House')
@@ -25,7 +32,7 @@ class Category(models.Model):
 
     def __str__(self):
         return self.category_name
-    
+
 
 class Property(models.Model):
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
@@ -48,21 +55,31 @@ class Property(models.Model):
         return self.property_name
 
 
-    
 class City(models.Model):
     city_name = models.CharField(max_length=50)
     point_geom = gis_models.PointField()
 
     def __str__(self):
         return self.city_name
-    
+
+
 class Booking(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     property = models.ForeignKey(Property, on_delete=models.CASCADE)
     check_in = models.DateField()
     check_out = models.DateField()
     total_price = models.DecimalField(max_digits=10, decimal_places=2, editable=False)
-    status = models.CharField(max_length=20, choices=[('pending', 'Pending'), ('confirmed', 'Confirmed'), ('canceled', 'Canceled'), ('completed', 'Completed'), ('paid', 'Paid')], default='pending')
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending'),
+            ('confirmed', 'Confirmed'),
+            ('canceled', 'Canceled'),
+            ('completed', 'Completed'),
+            ('paid', 'Paid')
+        ],
+        default='pending'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     modified_at = models.DateTimeField(auto_now=True)
     active = models.BooleanField(default=True)
@@ -73,13 +90,12 @@ class Booking(models.Model):
             models.Index(fields=['check_in', 'check_out']),
             models.Index(fields=['status']),
         ]
-  
+
     def save(self, *args, **kwargs):
-        self.full_clean()  # déclenche clean()
+        self.full_clean()
         nights = (self.check_out - self.check_in).days
         self.total_price = nights * self.property.price_per_night
         super().save(*args, **kwargs)
-
 
     def clean(self):
         if self.check_out <= self.check_in:
@@ -95,7 +111,8 @@ class Booking(models.Model):
         ).exclude(pk=self.pk)
         if overlapping.exists():
             raise ValidationError("This property is already booked for these dates")
-    
+
+
 class PropertyImage(models.Model):
     property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='images')
     image = models.ImageField(upload_to='property_images/')

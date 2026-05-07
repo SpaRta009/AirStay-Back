@@ -23,7 +23,10 @@ if sys.platform == "win32":
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-default-key')
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+ALLOWED_HOSTS = os.environ.get(
+    'ALLOWED_HOSTS',
+    'localhost,127.0.0.1'
+).split(',')
 
 # =====================
 # Applications
@@ -49,8 +52,8 @@ INSTALLED_APPS = [
 # =====================
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',       # ← doit être en 2e
-    'corsheaders.middleware.CorsMiddleware',            # ← avant CommonMiddleware
+    'whitenoise.middleware.WhiteNoiseMiddleware',
+    'corsheaders.middleware.CorsMiddleware',       # ← doit être AVANT CommonMiddleware
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -83,7 +86,6 @@ WSGI_APPLICATION = 'AirBNB.wsgi.application'
 # Base de données
 # =====================
 if os.environ.get('DATABASE_URL'):
-    # Railway → PostgreSQL + PostGIS
     DATABASES = {
         'default': dj_database_url.config(
             default=os.environ.get('DATABASE_URL'),
@@ -92,7 +94,6 @@ if os.environ.get('DATABASE_URL'):
         )
     }
 else:
-    # Local → ta config PostgreSQL locale
     DATABASES = {
         'default': {
             'ENGINE': 'django.contrib.gis.db.backends.postgis',
@@ -158,6 +159,8 @@ REST_FRAMEWORK = {
 # =====================
 # CORS & CSRF
 # =====================
+# ✅ FIX CORS : lire depuis variable d'environnement Railway
+# Sur Railway, définir : CORS_ALLOWED_ORIGINS=https://ton-app.vercel.app,http://localhost:5173
 CORS_ALLOWED_ORIGINS = os.environ.get(
     'CORS_ALLOWED_ORIGINS',
     'http://localhost:5173'
@@ -165,6 +168,7 @@ CORS_ALLOWED_ORIGINS = os.environ.get(
 
 CORS_ALLOW_CREDENTIALS = True
 
+# ✅ FIX CSRF : même chose
 CSRF_TRUSTED_ORIGINS = os.environ.get(
     'CSRF_TRUSTED_ORIGINS',
     'http://localhost:5173'
