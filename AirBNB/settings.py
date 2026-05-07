@@ -28,6 +28,11 @@ ALLOWED_HOSTS = os.environ.get(
     'localhost,127.0.0.1'
 ).split(',')
 
+# ✅ FIX MIXED CONTENT : Railway est derrière un proxy HTTPS
+# Sans ça, request.build_absolute_uri() retourne http:// au lieu de https://
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
+
 # =====================
 # Applications
 # =====================
