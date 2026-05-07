@@ -31,6 +31,79 @@ class PropertyList(generics.ListCreateAPIView):
     name = 'properties-list'
     permission_classes = [IsAuthenticatedOrReadOnly]
 
+    def create(self, request, *args, **kwargs):
+        """
+        ✅ FIX : override create pour gérer le FormData du frontend.
+        Le frontend envoie :
+          - category  → ID numérique (on résout par pk)
+          - city      → ID numérique (on résout par pk)
+          - lat / lng → coordonnées GPS séparées (on assemble en Point)
+          - image     → fichier binaire
+        """
+        data = request.data
+
+        # ── Résoudre la catégorie (ID ou nom) ──
+        cat_val = data.get('category')
+        if not cat_val:
+            return Response({'error': 'category est requis.'}, status=400)
+        try:
+            category = Category.objects.get(pk=int(cat_val))
+        except (ValueError, TypeError):
+            try:
+                category = Category.objects.get(category_name=cat_val)
+            except Category.DoesNotExist:
+                return Response({'error': f'Catégorie "{cat_val}" introuvable.'}, status=400)
+        except Category.DoesNotExist:
+            return Response({'error': f'Catégorie ID {cat_val} introuvable.'}, status=400)
+
+        # ── Résoudre la ville (city ou city_id) ──
+        city_val = data.get('city_id') or data.get('city')
+        if not city_val:
+            return Response({'error': 'city est requis.'}, status=400)
+        try:
+            city = City.objects.get(pk=int(city_val))
+        except (City.DoesNotExist, ValueError, TypeError):
+            return Response({'error': f'Ville ID {city_val} introuvable.'}, status=400)
+
+        # ── Coordonnées GPS → Point géographique ──
+        lat = data.get('lat')
+        lng = data.get('lng')
+        if not lat or not lng:
+            return Response({'error': 'lat et lng sont requis.'}, status=400)
+        try:
+            point = Point(float(lng), float(lat), srid=4326)
+        except (ValueError, TypeError):
+            return Response({'error': 'lat/lng invalides.'}, status=400)
+
+        # ── Champs texte ──
+        property_name = data.get('property_name', '').strip()
+        if not property_name:
+            return Response({'error': 'property_name est requis.'}, status=400)
+
+        price = data.get('price_per_night')
+        if not price:
+            return Response({'error': 'price_per_night est requis.'}, status=400)
+
+        max_guests = data.get('max_guests', 2)
+
+        # ── Création ──
+        prop = Property.objects.create(
+            category=category,
+            city=city,
+            owner=request.user,
+            property_name=property_name,
+            description=data.get('description', ''),
+            price_per_night=price,
+            max_guests=max_guests,
+            point_geom=point,
+            image=request.FILES.get('image'),
+            active=True,
+        )
+
+        serializer = self.get_serializer(prop, context={'request': request})
+        return Response(serializer.data, status=201)
+
+
 class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
     queryset = Property.objects.filter(active=True)
     serializer_class = PropertySerializer
@@ -59,14 +132,11 @@ class CityList(generics.ListAPIView):
         return qs[:10]
 
 
-# ── ✅ NOUVEAU : Nearby par property ID ──
-# Appelé quand on clique sur un marker de property sur la carte
-# URL : /properties/<pk>/nearby/
+# ── Nearby par property ID ──
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def property_nearby(request, pk):
     prop = get_object_or_404(Property, pk=pk, active=True)
-
     nearby = (
         Property.objects
         .filter(active=True)
@@ -75,7 +145,6 @@ def property_nearby(request, pk):
         .filter(distance__lte=D(km=20))
         .order_by('distance')[:8]
     )
-
     data = [
         {
             'pk': p.pk,
@@ -89,9 +158,7 @@ def property_nearby(request, pk):
     return Response(data)
 
 
-# ── ✅ NOUVEAU : Nearby par coordonnées GPS ──
-# Appelé quand on clique sur "Ma position" ou un pin personnalisé
-# URL : /nearby-all/?lat=36.7&lng=3.0   (ajouter &city_filter=true pour filtrer par ville)
+# ── Nearby par coordonnées GPS ──
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def nearby_all(request):
@@ -109,7 +176,6 @@ def nearby_all(request):
     city_filter = request.query_params.get('city_filter') == 'true'
 
     if city_filter:
-        # Trouver la ville la plus proche et filtrer par elle
         nearest_city = (
             City.objects
             .annotate(distance=Distance('point_geom', point))
@@ -152,11 +218,9 @@ def nearby_all(request):
 @permission_classes([AllowAny])
 def register(request):
     data = request.data
-
     for field in ['username', 'email', 'password']:
         if not data.get(field):
             return Response({'error': f'Le champ "{field}" est obligatoire.'}, status=400)
-
     try:
         raw_phone = data.get('phone', '')
         phone_value = raw_phone.strip() if raw_phone else None
@@ -184,7 +248,6 @@ def register(request):
                 'phone': user.phone_number or '',
             }
         }, status=201)
-
     except Exception as e:
         error_msg = str(e)
         if 'username' in error_msg and 'already exists' in error_msg:
@@ -199,10 +262,8 @@ def register(request):
 def login_view(request):
     email = request.data.get('email', '').strip()
     password = request.data.get('password', '')
-
     if not email or not password:
         return Response({'error': 'Email et mot de passe sont obligatoires.'}, status=400)
-
     try:
         user_obj = User.objects.get(email=email)
         user = authenticate(username=user_obj.username, password=password)
@@ -221,6 +282,5 @@ def login_view(request):
                 }
             })
         return Response({'error': 'Mot de passe incorrect.'}, status=400)
-
     except User.DoesNotExist:
         return Response({'error': 'Aucun compte trouvé avec cet email.'}, status=400)

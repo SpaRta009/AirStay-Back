@@ -3,9 +3,8 @@ from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 
 
-# ── City simple (pour imbriquer dans Property) ──
+# ── City simple (imbriqué dans Property) ──
 class CitySimpleSerializer(serializers.ModelSerializer):
-    # ✅ FIX : expose "name" pour que le frontend accède city?.name
     name = serializers.CharField(source='city_name', read_only=True)
 
     class Meta:
@@ -28,10 +27,10 @@ class PropertySerializer(GeoFeatureModelSerializer):
         slug_field='category_name'
     )
 
-    # ✅ FIX : city imbriqué → retourne {"pk": 1, "name": "Alger"} au lieu d'un simple ID
+    # read : retourne {"pk": 1, "name": "Alger"}
     city = CitySimpleSerializer(read_only=True)
 
-    # ✅ FIX : city_id pour les créations/modifications (write-only)
+    # write : accepte un city ID
     city_id = serializers.PrimaryKeyRelatedField(
         queryset=City.objects.all(),
         source='city',
@@ -39,7 +38,7 @@ class PropertySerializer(GeoFeatureModelSerializer):
         required=False,
     )
 
-    # ✅ FIX : image retourne une URL absolue (https://...) au lieu de /media/...
+    # ✅ FIX IMAGES : URL absolue HTTPS
     image = serializers.SerializerMethodField()
 
     def get_image(self, obj):
@@ -48,9 +47,13 @@ class PropertySerializer(GeoFeatureModelSerializer):
         request = self.context.get('request')
         if request:
             url = request.build_absolute_uri(obj.image.url)
-            # ✅ FIX MIXED CONTENT : forcer HTTPS même si Railway retourne http://
+            # Force HTTPS — Railway est derrière un proxy, build_absolute_uri
+            # peut retourner http:// même avec SECURE_PROXY_SSL_HEADER
             return url.replace('http://', 'https://')
-        return obj.image.url
+        # Fallback sans request : construire l'URL manuellement
+        from django.conf import settings as django_settings
+        base = 'https://web-production-26d8d.up.railway.app'
+        return f"{base}{obj.image.url}"
 
     class Meta:
         model = Property
@@ -72,7 +75,7 @@ class PropertySerializer(GeoFeatureModelSerializer):
         )
 
 
-# ── City (GeoJSON complet pour /cities/) ──
+# ── City GeoJSON complet (pour /cities/) ──
 class CitySerializer(GeoFeatureModelSerializer):
     proximity = serializers.SerializerMethodField()
 
