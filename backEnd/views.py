@@ -62,17 +62,20 @@ class CityList(generics.ListAPIView):
 @permission_classes([AllowAny])
 def register(request):
     data = request.data
+
     try:
         user = User.objects.create_user(
-            username=data['username'],
-            email=data['email'],
-            password=data['password'],
+            username=data.get('username'),
+            email=data.get('email'),
+            password=data.get('password'),
             first_name=data.get('firstName', ''),
             last_name=data.get('lastName', ''),
-            phone_number=data['phone'],
+            phone_number=data.get('phone', ''),
             role=data.get('role', 'guest'),
         )
+
         token, _ = Token.objects.get_or_create(user=user)
+
         return Response({
             'token': token.key,
             'user': {
@@ -85,6 +88,7 @@ def register(request):
                 'phone': user.phone_number,
             }
         }, status=201)
+
     except Exception as e:
         return Response({'error': str(e)}, status=400)
 
@@ -94,23 +98,30 @@ def register(request):
 def login_view(request):
     email = request.data.get('email')
     password = request.data.get('password')
+
+    if not email or not password:
+        return Response({'error': 'Missing credentials'}, status=400)
+
     try:
-        user_obj = User.objects.get(email=email)
-        user = authenticate(username=user_obj.username, password=password)
-        if user:
-            token, _ = Token.objects.get_or_create(user=user)
-            return Response({
-                'token': token.key,
-                'user': {
-                    'id': user.id,
-                    'username': user.username,
-                    'email': user.email,
-                    'role': user.role,
-                    'firstName': user.first_name,
-                    'lastName': user.last_name,
-                    'phone': user.phone_number,
-                }
-            })
-        return Response({'error': 'Invalid credentials'}, status=400)
+        user = User.objects.get(email=email)
     except User.DoesNotExist:
         return Response({'error': 'Invalid credentials'}, status=400)
+
+    auth_user = authenticate(username=user.username, password=password)
+
+    if auth_user:
+        token, _ = Token.objects.get_or_create(user=auth_user)
+        return Response({
+            'token': token.key,
+            'user': {
+                'id': auth_user.id,
+                'username': auth_user.username,
+                'email': auth_user.email,
+                'role': auth_user.role,
+                'firstName': auth_user.first_name,
+                'lastName': auth_user.last_name,
+                'phone': auth_user.phone_number,
+            }
+        })
+
+    return Response({'error': 'Invalid credentials'}, status=400)
