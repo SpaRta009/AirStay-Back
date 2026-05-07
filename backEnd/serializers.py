@@ -27,7 +27,7 @@ class PropertySerializer(GeoFeatureModelSerializer):
         slug_field='category_name'
     )
 
-    # read : retourne {"pk": 1, "name": "Alger"}
+    # read : {"pk": 1, "name": "Alger"}
     city = CitySimpleSerializer(read_only=True)
 
     # write : accepte un city ID
@@ -38,22 +38,28 @@ class PropertySerializer(GeoFeatureModelSerializer):
         required=False,
     )
 
-    # ✅ FIX IMAGES : URL absolue HTTPS
+    # ✅ FIX IMAGES
+    # Cloudinary → URL absolue https:// déjà correcte (obj.image.url retourne l'URL Cloudinary)
+    # Local dev  → URL relative, on la rend absolue via request
     image = serializers.SerializerMethodField()
 
     def get_image(self, obj):
         if not obj.image:
             return None
+
+        url = obj.image.url  # Cloudinary : "https://res.cloudinary.com/..."
+                              # Local      : "/media/property_images/photo.jpg"
+
+        # Si c'est déjà une URL absolue (Cloudinary), on la retourne directement
+        if url.startswith('http'):
+            return url
+
+        # Sinon (local dev), on la rend absolue avec la request
         request = self.context.get('request')
         if request:
-            url = request.build_absolute_uri(obj.image.url)
-            # Force HTTPS — Railway est derrière un proxy, build_absolute_uri
-            # peut retourner http:// même avec SECURE_PROXY_SSL_HEADER
-            return url.replace('http://', 'https://')
-        # Fallback sans request : construire l'URL manuellement
-        from django.conf import settings as django_settings
-        base = 'https://web-production-26d8d.up.railway.app'
-        return f"{base}{obj.image.url}"
+            return request.build_absolute_uri(url)
+
+        return url
 
     class Meta:
         model = Property

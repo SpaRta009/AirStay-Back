@@ -7,7 +7,6 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# === GeoDjango / GDAL Setup (Windows local uniquement) ===
 import sys
 import ctypes
 
@@ -28,8 +27,7 @@ ALLOWED_HOSTS = os.environ.get(
     'localhost,127.0.0.1'
 ).split(',')
 
-# ✅ FIX MIXED CONTENT : Railway est derrière un proxy HTTPS
-# Sans ça, request.build_absolute_uri() retourne http:// au lieu de https://
+# ✅ Railway est derrière un proxy HTTPS
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 
@@ -49,6 +47,9 @@ INSTALLED_APPS = [
     'django_cleanup.apps.CleanupConfig',
     'rest_framework',
     'rest_framework_gis',
+    # ✅ Cloudinary
+    'cloudinary',
+    'cloudinary_storage',
     'backEnd',
 ]
 
@@ -58,7 +59,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
-    'corsheaders.middleware.CorsMiddleware',       # ← doit être AVANT CommonMiddleware
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -137,14 +138,30 @@ USE_I18N = True
 USE_TZ = True
 
 # =====================
-# Static / Media
+# Static files
 # =====================
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
+# =====================
+# ✅ Media via Cloudinary (persist entre les déploiements)
+# =====================
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': os.environ.get('CLOUDINARY_CLOUD_NAME', ''),
+    'API_KEY':    os.environ.get('CLOUDINARY_API_KEY', ''),
+    'API_SECRET': os.environ.get('CLOUDINARY_API_SECRET', ''),
+}
+
+# Si Cloudinary est configuré → utiliser Cloudinary pour les médias
+# Sinon → fallback local (dev)
+if os.environ.get('CLOUDINARY_CLOUD_NAME'):
+    DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
+    MEDIA_URL = '/media/'
+else:
+    # Local dev
+    MEDIA_URL = '/media/'
+    MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -164,8 +181,6 @@ REST_FRAMEWORK = {
 # =====================
 # CORS & CSRF
 # =====================
-# ✅ FIX CORS : lire depuis variable d'environnement Railway
-# Sur Railway, définir : CORS_ALLOWED_ORIGINS=https://ton-app.vercel.app,http://localhost:5173
 CORS_ALLOWED_ORIGINS = os.environ.get(
     'CORS_ALLOWED_ORIGINS',
     'http://localhost:5173'
@@ -173,7 +188,6 @@ CORS_ALLOWED_ORIGINS = os.environ.get(
 
 CORS_ALLOW_CREDENTIALS = True
 
-# ✅ FIX CSRF : même chose
 CSRF_TRUSTED_ORIGINS = os.environ.get(
     'CSRF_TRUSTED_ORIGINS',
     'http://localhost:5173'
