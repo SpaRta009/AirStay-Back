@@ -47,11 +47,10 @@ class PropertySerializer(GeoFeatureModelSerializer):
             return None
         request = self.context.get('request')
         if request:
-            return request.build_absolute_uri(obj.image.url)
-        # Fallback si pas de request dans le contexte
-        from django.conf import settings
-        base = getattr(settings, 'RAILWAY_STATIC_URL', '').rstrip('/')
-        return f"{base}{obj.image.url}" if base else obj.image.url
+            url = request.build_absolute_uri(obj.image.url)
+            # ✅ FIX MIXED CONTENT : forcer HTTPS même si Railway retourne http://
+            return url.replace('http://', 'https://')
+        return obj.image.url
 
     class Meta:
         model = Property
