@@ -62,20 +62,17 @@ class CityList(generics.ListAPIView):
 @permission_classes([AllowAny])
 def register(request):
     data = request.data
-
     try:
         user = User.objects.create_user(
-            username=data.get('username'),
-            email=data.get('email'),
-            password=data.get('password'),
+            username=data['username'],
+            email=data['email'],
+            password=data['password'],
             first_name=data.get('firstName', ''),
             last_name=data.get('lastName', ''),
-            phone_number=data.get('phone', ''),
+            phone_number=data['phone'],
             role=data.get('role', 'guest'),
         )
-
         token, _ = Token.objects.get_or_create(user=user)
-
         return Response({
             'token': token.key,
             'user': {
@@ -88,7 +85,6 @@ def register(request):
                 'phone': user.phone_number,
             }
         }, status=201)
-
     except Exception as e:
         return Response({'error': str(e)}, status=400)
 
