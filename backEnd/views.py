@@ -6,17 +6,17 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
-from django.http import Http404
 from django.contrib.gis.db.models.functions import Distance
+from django.contrib.gis.geos import Point
+from django.contrib.gis.measure import D
 from django.shortcuts import get_object_or_404
 
 
-# ---- Categories ----
+# ── Categories ──
 class CategoryList(generics.ListCreateAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     name = 'category-list'
-
 
 class CategoryDetail(generics.RetrieveUpdateDestroyAPIView):
     queryset = Category.objects.all()
@@ -24,13 +24,12 @@ class CategoryDetail(generics.RetrieveUpdateDestroyAPIView):
     name = 'category-detail'
 
 
-# ---- Properties ----
+# ── Properties ──
 class PropertyList(generics.ListCreateAPIView):
     queryset = Property.objects.filter(active=True)
     serializer_class = PropertySerializer
     name = 'properties-list'
     permission_classes = [IsAuthenticatedOrReadOnly]
-
 
 class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
     queryset = Property.objects.filter(active=True)
@@ -38,7 +37,7 @@ class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
     name = 'properties-detail'
 
 
-# ---- Cities ----
+# ── Cities ──
 class CityList(generics.ListAPIView):
     serializer_class = CitySerializer
     name = "cities-list"
@@ -60,23 +59,108 @@ class CityList(generics.ListAPIView):
         return qs[:10]
 
 
-# ---- Auth ----
+# ── ✅ NOUVEAU : Nearby par property ID ──
+# Appelé quand on clique sur un marker de property sur la carte
+# URL : /properties/<pk>/nearby/
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def property_nearby(request, pk):
+    prop = get_object_or_404(Property, pk=pk, active=True)
+
+    nearby = (
+        Property.objects
+        .filter(active=True)
+        .exclude(pk=pk)
+        .annotate(distance=Distance('point_geom', prop.point_geom))
+        .filter(distance__lte=D(km=20))
+        .order_by('distance')[:8]
+    )
+
+    data = [
+        {
+            'pk': p.pk,
+            'property_name': p.property_name,
+            'distance': round(p.distance.m),
+            'price_per_night': str(p.price_per_night),
+            'city': p.city.city_name if p.city else '',
+        }
+        for p in nearby
+    ]
+    return Response(data)
+
+
+# ── ✅ NOUVEAU : Nearby par coordonnées GPS ──
+# Appelé quand on clique sur "Ma position" ou un pin personnalisé
+# URL : /nearby-all/?lat=36.7&lng=3.0   (ajouter &city_filter=true pour filtrer par ville)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def nearby_all(request):
+    lat = request.query_params.get('lat')
+    lng = request.query_params.get('lng')
+
+    if not lat or not lng:
+        return Response({'error': 'Paramètres lat et lng requis.'}, status=400)
+
+    try:
+        point = Point(float(lng), float(lat), srid=4326)
+    except (ValueError, TypeError):
+        return Response({'error': 'lat/lng invalides.'}, status=400)
+
+    city_filter = request.query_params.get('city_filter') == 'true'
+
+    if city_filter:
+        # Trouver la ville la plus proche et filtrer par elle
+        nearest_city = (
+            City.objects
+            .annotate(distance=Distance('point_geom', point))
+            .order_by('distance')
+            .first()
+        )
+        if nearest_city:
+            qs = (
+                Property.objects
+                .filter(active=True, city=nearest_city)
+                .annotate(distance=Distance('point_geom', point))
+                .order_by('distance')[:8]
+            )
+        else:
+            qs = Property.objects.none()
+    else:
+        qs = (
+            Property.objects
+            .filter(active=True)
+            .annotate(distance=Distance('point_geom', point))
+            .filter(distance__lte=D(km=20))
+            .order_by('distance')[:8]
+        )
+
+    data = [
+        {
+            'pk': p.pk,
+            'property_name': p.property_name,
+            'distance': round(p.distance.m),
+            'price_per_night': str(p.price_per_night),
+            'city': p.city.city_name if p.city else '',
+        }
+        for p in qs
+    ]
+    return Response(data)
+
+
+# ── Auth ──
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
     data = request.data
 
-    # ✅ FIX 1 : Vérifier les champs obligatoires manuellement pour un message clair
-    required_fields = ['username', 'email', 'password']
-    for field in required_fields:
+    for field in ['username', 'email', 'password']:
         if not data.get(field):
             return Response({'error': f'Le champ "{field}" est obligatoire.'}, status=400)
 
     try:
-        # ✅ FIX 2 : phone vide ("") converti en None pour respecter unique=True
         raw_phone = data.get('phone', '')
         phone_value = raw_phone.strip() if raw_phone else None
-        phone_value = phone_value if phone_value else None
+        phone_value = phone_value or None
 
         user = User.objects.create_user(
             username=data['username'],
@@ -102,15 +186,9 @@ def register(request):
         }, status=201)
 
     except Exception as e:
-        # ✅ FIX 3 : Message d'erreur plus lisible
         error_msg = str(e)
-        # Cas username déjà pris
         if 'username' in error_msg and 'already exists' in error_msg:
-            return Response({'error': 'Ce nom d\'utilisateur est déjà utilisé.'}, status=400)
-        # Cas email déjà pris (si tu ajoutes unique sur email plus tard)
-        if 'email' in error_msg and 'already exists' in error_msg:
-            return Response({'error': 'Cet email est déjà utilisé.'}, status=400)
-        # Cas téléphone déjà pris
+            return Response({'error': "Ce nom d'utilisateur est déjà utilisé."}, status=400)
         if 'phone_number' in error_msg and 'already exists' in error_msg:
             return Response({'error': 'Ce numéro de téléphone est déjà utilisé.'}, status=400)
         return Response({'error': error_msg}, status=400)
@@ -122,7 +200,6 @@ def login_view(request):
     email = request.data.get('email', '').strip()
     password = request.data.get('password', '')
 
-    # ✅ FIX 4 : Vérification des champs vides
     if not email or not password:
         return Response({'error': 'Email et mot de passe sont obligatoires.'}, status=400)
 
