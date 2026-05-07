@@ -2,19 +2,56 @@ from .models import Category, Property, City
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 
-# ---- Category ----
+
+# ── City simple (pour imbriquer dans Property) ──
+class CitySimpleSerializer(serializers.ModelSerializer):
+    # ✅ FIX : expose "name" pour que le frontend accède city?.name
+    name = serializers.CharField(source='city_name', read_only=True)
+
+    class Meta:
+        model = City
+        fields = ('pk', 'name')
+
+
+# ── Category ──
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = '__all__'
 
-# ---- Property ----
+
+# ── Property ──
 class PropertySerializer(GeoFeatureModelSerializer):
 
     category = serializers.SlugRelatedField(
         queryset=Category.objects.all(),
         slug_field='category_name'
     )
+
+    # ✅ FIX : city imbriqué → retourne {"pk": 1, "name": "Alger"} au lieu d'un simple ID
+    city = CitySimpleSerializer(read_only=True)
+
+    # ✅ FIX : city_id pour les créations/modifications (write-only)
+    city_id = serializers.PrimaryKeyRelatedField(
+        queryset=City.objects.all(),
+        source='city',
+        write_only=True,
+        required=False,
+    )
+
+    # ✅ FIX : image retourne une URL absolue (https://...) au lieu de /media/...
+    image = serializers.SerializerMethodField()
+
+    def get_image(self, obj):
+        if not obj.image:
+            return None
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(obj.image.url)
+        # Fallback si pas de request dans le contexte
+        from django.conf import settings
+        base = getattr(settings, 'RAILWAY_STATIC_URL', '').rstrip('/')
+        return f"{base}{obj.image.url}" if base else obj.image.url
 
     class Meta:
         model = Property
@@ -32,9 +69,11 @@ class PropertySerializer(GeoFeatureModelSerializer):
             'active',
             'owner',
             'city',
+            'city_id',
         )
 
-# ---- City ----
+
+# ── City (GeoJSON complet pour /cities/) ──
 class CitySerializer(GeoFeatureModelSerializer):
     proximity = serializers.SerializerMethodField()
 
@@ -42,7 +81,7 @@ class CitySerializer(GeoFeatureModelSerializer):
         if hasattr(obj, 'distance'):
             return obj.distance.km
         return None
-        
+
     class Meta:
         model = City
         geo_field = "point_geom"
