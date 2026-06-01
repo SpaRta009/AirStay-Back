@@ -214,14 +214,35 @@ def nearby_all(request):
 
 
 # ── Bookings ──
-@api_view(['POST'])
+@api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticatedOrReadOnly])
 def booking_create(request):
     """
-    POST /bookings/
-    Body: { property_id, check_in (YYYY-MM-DD), check_out (YYYY-MM-DD) }
-    Returns the created booking or validation errors.
+    GET  /bookings/  -> returns the list of bookings for the authenticated user
+    POST /bookings/  -> create a booking (same as before)
     """
+    # GET: return user's bookings (requires authentication)
+    if request.method == 'GET':
+        if not request.user or not request.user.is_authenticated:
+            return Response({'error': 'Authentication credentials were not provided.'}, status=401)
+
+        bookings = Booking.objects.filter(user=request.user).select_related('property').order_by('-created_at')
+        data = [
+            {
+                'id':            b.id,
+                'property_id':   b.property.pk,
+                'property_name': b.property.property_name,
+                'check_in':      str(b.check_in),
+                'check_out':     str(b.check_out),
+                'total_price':   str(b.total_price),
+                'status':        b.status,
+                'created_at':    str(b.created_at),
+            }
+            for b in bookings
+        ]
+        return Response(data)
+
+    # POST: create a booking (existing behavior)
     property_id = request.data.get('property_id')
     check_in    = request.data.get('check_in')
     check_out   = request.data.get('check_out')
