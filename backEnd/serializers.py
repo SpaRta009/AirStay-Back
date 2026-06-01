@@ -1,4 +1,4 @@
-from .models import Category, Property, City
+from .models import Category, Property, City, Booking
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 
@@ -98,3 +98,33 @@ class CitySerializer(GeoFeatureModelSerializer):
             "city_name",
             "proximity",
         )
+
+# ── Booking ──
+class BookingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Booking
+        fields = ('id', 'property', 'check_in', 'check_out', 'total_price', 'status', 'created_at')
+        read_only_fields = ('total_price', 'status', 'created_at')
+
+    def validate(self, data):
+        check_in  = data.get('check_in')
+        check_out = data.get('check_out')
+        prop      = data.get('property')
+
+        if check_in and check_out and check_out <= check_in:
+            raise serializers.ValidationError("Check-out must be after check-in.")
+
+        if check_in and check_out and prop:
+            overlapping = Booking.objects.filter(
+                property=prop,
+                check_in__lt=check_out,
+                check_out__gt=check_in,
+                status__in=['pending', 'confirmed', 'paid'],
+            )
+            if self.instance:
+                overlapping = overlapping.exclude(pk=self.instance.pk)
+            if overlapping.exists():
+                raise serializers.ValidationError(
+                    "This property is already booked for the selected dates."
+                )
+        return data

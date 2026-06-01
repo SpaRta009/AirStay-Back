@@ -1,5 +1,5 @@
-from .models import Property, Category, City, User
-from .serializers import CategorySerializer, CitySerializer, PropertySerializer
+from .models import Property, Category, City, User, Booking
+from .serializers import CategorySerializer, CitySerializer, PropertySerializer, BookingSerializer
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny
 from rest_framework.decorators import api_view, permission_classes
@@ -209,6 +209,63 @@ def nearby_all(request):
             'city': p.city.city_name if p.city else '',
         }
         for p in qs
+    ]
+    return Response(data)
+
+
+# ── Bookings ──
+@api_view(['POST'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def booking_create(request):
+    """
+    POST /bookings/
+    Body: { property_id, check_in (YYYY-MM-DD), check_out (YYYY-MM-DD) }
+    Returns the created booking or validation errors.
+    """
+    property_id = request.data.get('property_id')
+    check_in    = request.data.get('check_in')
+    check_out   = request.data.get('check_out')
+
+    if not property_id or not check_in or not check_out:
+        return Response(
+            {'error': 'property_id, check_in et check_out sont requis.'},
+            status=400
+        )
+
+    prop = get_object_or_404(Property, pk=property_id, active=True)
+
+    serializer = BookingSerializer(data={
+        'property': prop.pk,
+        'check_in': check_in,
+        'check_out': check_out,
+    }, context={'request': request})
+
+    if serializer.is_valid():
+        booking = serializer.save(user=request.user, property=prop)
+        return Response(BookingSerializer(booking).data, status=201)
+
+    return Response(serializer.errors, status=400)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def booking_list(request):
+    """
+    GET /bookings/ → liste des réservations de l'utilisateur connecté.
+    """
+    bookings = Booking.objects.filter(user=request.user).select_related('property').order_by('-created_at')
+    data = [
+        {
+            'id':            b.id,
+            'property_id':   b.property.pk,
+            'property_name': b.property.property_name,
+            'check_in':      str(b.check_in),
+            'check_out':     str(b.check_out),
+            'total_price':   str(b.total_price),
+            'status':        b.status,
+            'created_at':    str(b.created_at),
+        }
+        for b in bookings
     ]
     return Response(data)
 

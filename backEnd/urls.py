@@ -19,6 +19,8 @@ urlpatterns = [
 
     path("auth/register/",           views.register,                 name="register"),
     path("auth/login/",              views.login_view,               name="login"),
+    path("bookings/",                views.booking_create,           name="booking-create"),
+    path("bookings/list/",           views.booking_list,             name="booking-list"),
     path("api-auth/",                include("rest_framework.urls")),
 ]
 
