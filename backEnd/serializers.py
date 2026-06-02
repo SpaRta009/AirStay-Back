@@ -82,6 +82,7 @@ class PropertySerializer(GeoFeatureModelSerializer):
             'created_at',
             'modified_at',
             'image',
+            'images',        # ← ADD THIS LINE
             'active',
             'owner',
             'city',
