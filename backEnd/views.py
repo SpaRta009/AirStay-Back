@@ -32,17 +32,8 @@ class PropertyList(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticatedOrReadOnly]
 
     def create(self, request, *args, **kwargs):
-        """
-        ✅ FIX : override create pour gérer le FormData du frontend.
-        Le frontend envoie :
-          - category  → ID numérique (on résout par pk)
-          - city      → ID numérique (on résout par pk)
-          - lat / lng → coordonnées GPS séparées (on assemble en Point)
-          - image     → fichier binaire
-        """
         data = request.data
 
-        # ── Résoudre la catégorie (ID ou nom) ──
         cat_val = data.get('category')
         if not cat_val:
             return Response({'error': 'category est requis.'}, status=400)
@@ -56,7 +47,6 @@ class PropertyList(generics.ListCreateAPIView):
         except Category.DoesNotExist:
             return Response({'error': f'Catégorie ID {cat_val} introuvable.'}, status=400)
 
-        # ── Résoudre la ville (city ou city_id) ──
         city_val = data.get('city_id') or data.get('city')
         if not city_val:
             return Response({'error': 'city est requis.'}, status=400)
@@ -65,7 +55,6 @@ class PropertyList(generics.ListCreateAPIView):
         except (City.DoesNotExist, ValueError, TypeError):
             return Response({'error': f'Ville ID {city_val} introuvable.'}, status=400)
 
-        # ── Coordonnées GPS → Point géographique ──
         lat = data.get('lat')
         lng = data.get('lng')
         if not lat or not lng:
@@ -75,7 +64,6 @@ class PropertyList(generics.ListCreateAPIView):
         except (ValueError, TypeError):
             return Response({'error': 'lat/lng invalides.'}, status=400)
 
-        # ── Champs texte ──
         property_name = data.get('property_name', '').strip()
         if not property_name:
             return Response({'error': 'property_name est requis.'}, status=400)
@@ -86,7 +74,6 @@ class PropertyList(generics.ListCreateAPIView):
 
         max_guests = data.get('max_guests', 2)
 
-        # ── Création ──
         prop = Property.objects.create(
             category=category,
             city=city,
@@ -111,7 +98,6 @@ class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAuthenticatedOrReadOnly]
 
     def update(self, request, *args, **kwargs):
-        """Override update to ensure only the property owner can modify"""
         prop = self.get_object()
         if request.user != prop.owner:
             return Response(
@@ -173,28 +159,26 @@ def property_nearby(request, pk):
 @api_view(['POST'])
 @permission_classes([IsAuthenticatedOrReadOnly])
 def property_images_upload(request, pk):
-    """Upload images for a property"""
     prop = get_object_or_404(Property, pk=pk, active=True)
-    
-    # Only the owner can upload images
+
     if request.user != prop.owner:
         return Response(
             {'error': 'You do not have permission to upload images for this property.'},
             status=403
         )
-    
+
     if not request.FILES:
         return Response({'error': 'No images provided.'}, status=400)
-    
+
     images = request.FILES.getlist('image')
     created_images = []
-    
+
     for image_file in images:
         if not image_file.content_type.startswith('image/'):
             continue
         img = PropertyImage.objects.create(property=prop, image=image_file)
         created_images.append(PropertyImageSerializer(img).data)
-    
+
     return Response({'images': created_images}, status=201)
 
 
@@ -257,11 +241,6 @@ def nearby_all(request):
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticatedOrReadOnly])
 def booking_create(request):
-    """
-    GET  /bookings/  -> returns the list of bookings for the authenticated user
-    POST /bookings/  -> create a booking (same as before)
-    """
-    # GET: return user's bookings (requires authentication)
     if request.method == 'GET':
         if not request.user or not request.user.is_authenticated:
             return Response({'error': 'Authentication credentials were not provided.'}, status=401)
@@ -272,6 +251,9 @@ def booking_create(request):
                 'id':            b.id,
                 'property_id':   b.property.pk,
                 'property_name': b.property.property_name,
+                'property_image': (
+                    b.property.image.url if b.property.image else None
+                ),
                 'check_in':      str(b.check_in),
                 'check_out':     str(b.check_out),
                 'total_price':   str(b.total_price),
@@ -282,7 +264,7 @@ def booking_create(request):
         ]
         return Response(data)
 
-    # POST: create a booking (existing behavior)
+    # POST — create a booking
     property_id = request.data.get('property_id')
     check_in    = request.data.get('check_in')
     check_out   = request.data.get('check_out')
@@ -294,6 +276,13 @@ def booking_create(request):
         )
 
     prop = get_object_or_404(Property, pk=property_id, active=True)
+
+    # ✅ Block host from booking their own property
+    if request.user == prop.owner:
+        return Response(
+            {'error': 'You cannot book your own property.'},
+            status=400
+        )
 
     serializer = BookingSerializer(data={
         'property': prop.pk,
@@ -311,15 +300,15 @@ def booking_create(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticatedOrReadOnly])
 def booking_list(request):
-    """
-    GET /bookings/ → liste des réservations de l'utilisateur connecté.
-    """
     bookings = Booking.objects.filter(user=request.user).select_related('property').order_by('-created_at')
     data = [
         {
             'id':            b.id,
             'property_id':   b.property.pk,
             'property_name': b.property.property_name,
+            'property_image': (
+                b.property.image.url if b.property.image else None
+            ),
             'check_in':      str(b.check_in),
             'check_out':     str(b.check_out),
             'total_price':   str(b.total_price),

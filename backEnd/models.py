@@ -6,8 +6,6 @@ from django.forms import ValidationError
 
 class User(AbstractUser):
     second_name = models.CharField(max_length=30, blank=True, null=True)
-    # ✅ FIX : blank=True + null=True pour que le téléphone soit optionnel
-    # unique=True reste mais PostgreSQL accepte plusieurs NULL (contrairement aux "")
     phone_number = models.CharField(max_length=15, unique=True, blank=True, null=True)
     role = models.CharField(
         max_length=20,
@@ -103,11 +101,15 @@ class Booking(models.Model):
         nights = (self.check_out - self.check_in).days
         if nights <= 0:
             raise ValidationError("Invalid booking duration")
+
+        # ✅ FIX: Only block overlap for confirmed or paid bookings.
+        # Multiple guests can send pending requests for the same dates —
+        # the host chooses who to confirm. Once confirmed/paid, it blocks others.
         overlapping = Booking.objects.filter(
             property=self.property,
             check_in__lt=self.check_out,
             check_out__gt=self.check_in,
-            status__in=['pending', 'confirmed', 'paid']
+            status__in=['confirmed', 'paid'],  # removed 'pending'
         ).exclude(pk=self.pk)
         if overlapping.exists():
             raise ValidationError("This property is already booked for these dates")

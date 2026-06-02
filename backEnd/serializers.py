@@ -48,11 +48,9 @@ class PropertyImageSerializer(serializers.ModelSerializer):
 
         url = obj.image.url
 
-        # Cloudinary
         if url.startswith("http"):
             return url
 
-        # Local dev
         request = self.context.get("request")
         if request:
             return request.build_absolute_uri(url)
@@ -90,10 +88,8 @@ class PropertySerializer(GeoFeatureModelSerializer):
 
     owner = UserSerializer(read_only=True)
 
-    # image principale
     image = serializers.SerializerMethodField()
 
-    # images supplémentaires
     images = PropertyImageSerializer(
         many=True,
         read_only=True
@@ -105,11 +101,9 @@ class PropertySerializer(GeoFeatureModelSerializer):
 
         url = obj.image.url
 
-        # Cloudinary
         if url.startswith("http"):
             return url
 
-        # Local dev
         request = self.context.get("request")
         if request:
             return request.build_absolute_uri(url)
@@ -128,8 +122,8 @@ class PropertySerializer(GeoFeatureModelSerializer):
             'max_guests',
             'created_at',
             'modified_at',
-            'image',        # image principale
-            'images',       # images supplémentaires
+            'image',
+            'images',
             'active',
             'owner',
             'city',
@@ -191,11 +185,14 @@ class BookingSerializer(serializers.ModelSerializer):
             )
 
         if check_in and check_out and prop:
+            # ✅ FIX: Only block overlap for confirmed or paid bookings.
+            # 'pending' bookings do NOT block new reservations — a booking
+            # is only truly reserved once a host confirms it.
             overlapping = Booking.objects.filter(
                 property=prop,
                 check_in__lt=check_out,
                 check_out__gt=check_in,
-                status__in=['pending', 'confirmed', 'paid'],
+                status__in=['confirmed', 'paid'],  # removed 'pending'
             )
 
             if self.instance:
