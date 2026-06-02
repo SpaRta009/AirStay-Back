@@ -1,5 +1,5 @@
-from .models import Property, Category, City, User, Booking
-from .serializers import CategorySerializer, CitySerializer, PropertySerializer, BookingSerializer
+from .models import Property, Category, City, User, Booking, PropertyImage
+from .serializers import CategorySerializer, CitySerializer, PropertySerializer, BookingSerializer, PropertyImageSerializer
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny
 from rest_framework.decorators import api_view, permission_classes
@@ -108,6 +108,17 @@ class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
     queryset = Property.objects.filter(active=True)
     serializer_class = PropertySerializer
     name = 'properties-detail'
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def update(self, request, *args, **kwargs):
+        """Override update to ensure only the property owner can modify"""
+        prop = self.get_object()
+        if request.user != prop.owner:
+            return Response(
+                {'error': 'You do not have permission to edit this property.'},
+                status=403
+            )
+        return super().update(request, *args, **kwargs)
 
 
 # ── Cities ──
@@ -156,6 +167,35 @@ def property_nearby(request, pk):
         for p in nearby
     ]
     return Response(data)
+
+
+# ── Property images upload ──
+@api_view(['POST'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def property_images_upload(request, pk):
+    """Upload images for a property"""
+    prop = get_object_or_404(Property, pk=pk, active=True)
+    
+    # Only the owner can upload images
+    if request.user != prop.owner:
+        return Response(
+            {'error': 'You do not have permission to upload images for this property.'},
+            status=403
+        )
+    
+    if not request.FILES:
+        return Response({'error': 'No images provided.'}, status=400)
+    
+    images = request.FILES.getlist('image')
+    created_images = []
+    
+    for image_file in images:
+        if not image_file.content_type.startswith('image/'):
+            continue
+        img = PropertyImage.objects.create(property=prop, image=image_file)
+        created_images.append(PropertyImageSerializer(img).data)
+    
+    return Response({'images': created_images}, status=201)
 
 
 # ── Nearby par coordonnées GPS ──
