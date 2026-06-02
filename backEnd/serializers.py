@@ -1,4 +1,4 @@
-from .models import Category, Property, City, Booking, User
+from .models import Category, Property, City, Booking, User, PropertyImage
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 
@@ -54,23 +54,20 @@ class PropertySerializer(GeoFeatureModelSerializer):
     # Local dev  → URL relative, on la rend absolue via request
     image = serializers.SerializerMethodField()
 
-    def get_image(self, obj):
-        if not obj.image:
-            return None
+    images = serializers.SerializerMethodField()
 
-        url = obj.image.url  # Cloudinary : "https://res.cloudinary.com/..."
-                              # Local      : "/media/property_images/photo.jpg"
-
-        # Si c'est déjà une URL absolue (Cloudinary), on la retourne directement
-        if url.startswith('http'):
-            return url
-
-        # Sinon (local dev), on la rend absolue avec la request
+    def get_images(self, obj):
         request = self.context.get('request')
-        if request:
-            return request.build_absolute_uri(url)
-
-        return url
+        result = []
+        for img in obj.images.all():
+            url = img.image.url
+            if url.startswith('http'):
+                result.append(url)
+            elif request:
+                result.append(request.build_absolute_uri(url))
+            else:
+                result.append(url)
+        return result
 
     class Meta:
         model = Property
@@ -139,3 +136,12 @@ class BookingSerializer(serializers.ModelSerializer):
                     "This property is already booked for the selected dates."
                 )
         return data
+
+
+# ── PropertyImage ──
+class PropertyImageSerializer(serializers.ModelSerializer):
+    image = serializers.ImageField()
+
+    class Meta:
+        model = PropertyImage
+        fields = ('id', 'image')
