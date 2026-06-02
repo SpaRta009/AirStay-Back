@@ -14,6 +14,8 @@ urlpatterns = [
 
     path("cities/",                  views.CityList.as_view(),       name=views.CityList.name),
 
+    path("properties/<int:pk>/images/", views.property_images_upload, name="property-images-upload"),
+
     # ✅ NOUVEAU : nearby depuis des coordonnées GPS
     path("nearby-all/",              views.nearby_all,               name="nearby-all"),
 
