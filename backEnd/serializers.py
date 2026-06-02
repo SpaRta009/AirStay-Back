@@ -1,6 +1,14 @@
-from .models import Category, Property, City, Booking
+from .models import Category, Property, City, Booking, User
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
+
+
+# ── User (nested in Property as owner) ──
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'phone_number', 'role')
+        read_only_fields = ('id', 'username', 'email', 'first_name', 'last_name', 'phone_number', 'role')
 
 
 # ── City simple (imbriqué dans Property) ──
@@ -37,6 +45,9 @@ class PropertySerializer(GeoFeatureModelSerializer):
         write_only=True,
         required=False,
     )
+
+    # Owner as full nested object with username
+    owner = UserSerializer(read_only=True)
 
     # ✅ FIX IMAGES
     # Cloudinary → URL absolue https:// déjà correcte (obj.image.url retourne l'URL Cloudinary)
