@@ -47,14 +47,6 @@ class PropertyList(generics.ListCreateAPIView):
         except Category.DoesNotExist:
             return Response({'error': f'Catégorie ID {cat_val} introuvable.'}, status=400)
 
-        city_val = data.get('city_id') or data.get('city')
-        if not city_val:
-            return Response({'error': 'city est requis.'}, status=400)
-        try:
-            city = City.objects.get(pk=int(city_val))
-        except (City.DoesNotExist, ValueError, TypeError):
-            return Response({'error': f'Ville ID {city_val} introuvable.'}, status=400)
-
         lat = data.get('lat')
         lng = data.get('lng')
         if not lat or not lng:
@@ -63,6 +55,27 @@ class PropertyList(generics.ListCreateAPIView):
             point = Point(float(lng), float(lat), srid=4326)
         except (ValueError, TypeError):
             return Response({'error': 'lat/lng invalides.'}, status=400)
+
+        city_val = data.get('city_id') or data.get('city')
+        city_name_val = data.get('city_name', '').strip()
+
+        if city_val:
+            # Use existing DB city by ID
+            try:
+                city = City.objects.get(pk=int(city_val))
+            except (City.DoesNotExist, ValueError, TypeError):
+                return Response({'error': f'Ville ID {city_val} introuvable.'}, status=400)
+        elif city_name_val:
+            # Auto-create (or get) the city from the name + coordinates
+            city, _ = City.objects.get_or_create(
+                city_name__iexact=city_name_val,
+                defaults={
+                    'city_name': city_name_val,
+                    'point_geom': point,
+                }
+            )
+        else:
+            return Response({'error': 'city ou city_name est requis.'}, status=400)
 
         property_name = data.get('property_name', '').strip()
         if not property_name:
