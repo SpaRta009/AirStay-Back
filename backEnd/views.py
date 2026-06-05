@@ -258,7 +258,7 @@ def booking_create(request):
         if not request.user or not request.user.is_authenticated:
             return Response({'error': 'Authentication credentials were not provided.'}, status=401)
 
-        bookings = Booking.objects.filter(user=request.user).select_related('property').order_by('-created_at')
+        bookings = Booking.objects.filter(user=request.user).select_related('property').prefetch_related('property__images').order_by('-created_at')
         data = [
             {
                 'id':            b.id,
@@ -267,6 +267,9 @@ def booking_create(request):
                 'property_image': (
                     b.property.image.url if b.property.image else None
                 ),
+                'property_images': [
+                    img.image.url for img in b.property.images.all() if img.image
+                ],
                 'check_in':      str(b.check_in),
                 'check_out':     str(b.check_out),
                 'total_price':   str(b.total_price),
@@ -313,7 +316,7 @@ def booking_create(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticatedOrReadOnly])
 def booking_list(request):
-    bookings = Booking.objects.filter(user=request.user).select_related('property').order_by('-created_at')
+    bookings = Booking.objects.filter(user=request.user).select_related('property').prefetch_related('property__images').order_by('-created_at')
     data = [
         {
             'id':            b.id,
@@ -322,6 +325,9 @@ def booking_list(request):
             'property_image': (
                 b.property.image.url if b.property.image else None
             ),
+            'property_images': [
+                img.image.url for img in b.property.images.all() if img.image
+            ],
             'check_in':      str(b.check_in),
             'check_out':     str(b.check_out),
             'total_price':   str(b.total_price),
