@@ -67,13 +67,13 @@ class PropertyList(generics.ListCreateAPIView):
                 return Response({'error': f'Ville ID {city_val} introuvable.'}, status=400)
         elif city_name_val:
             # Auto-create (or get) the city from the name + coordinates
-            city, _ = City.objects.get_or_create(
-                city_name__iexact=city_name_val,
-                defaults={
-                    'city_name': city_name_val,
-                    'point_geom': point,
-                }
-            )
+            # get_or_create doesn't support __ lookups, so we do it manually
+            city = City.objects.filter(city_name__iexact=city_name_val).first()
+            if not city:
+                city = City.objects.create(
+                    city_name=city_name_val,
+                    point_geom=point,
+                )
         else:
             return Response({'error': 'city ou city_name est requis.'}, status=400)
 
