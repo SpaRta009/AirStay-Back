@@ -225,6 +225,57 @@ def property_images_upload(request, pk):
     return Response({'images': created_images}, status=201)
 
 
+# ── Delete a single PropertyImage ──
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def property_image_delete(request, pk, img_pk):
+    prop = get_object_or_404(Property, pk=pk, active=True)
+
+    if request.user != prop.owner:
+        return Response(
+            {'error': 'You do not have permission to delete images for this property.'},
+            status=403
+        )
+
+    img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
+    img.image.delete(save=False)  # remove file from storage
+    img.delete()
+    return Response(status=204)
+
+
+# ── Set cover image (promote a PropertyImage → Property.image) ──
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def property_set_cover(request, pk, img_pk):
+    prop = get_object_or_404(Property, pk=pk, active=True)
+
+    if request.user != prop.owner:
+        return Response(
+            {'error': 'You do not have permission to edit this property.'},
+            status=403
+        )
+
+    img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
+
+    # Swap: old cover becomes a PropertyImage, new cover becomes Property.image
+    old_cover = prop.image
+    new_cover = img.image
+
+    # Save the new file to Property.image field
+    prop.image = new_cover
+    prop.save(update_fields=['image'])
+
+    # Replace the PropertyImage file with the old cover (if there was one)
+    if old_cover:
+        img.image = old_cover
+        img.save(update_fields=['image'])
+    else:
+        img.delete()
+
+    serializer = PropertyImageSerializer(img if old_cover else None)
+    return Response({'message': 'Cover updated.'}, status=200)
+
+
 # ── Nearby par coordonnées GPS ──
 @api_view(['GET'])
 @permission_classes([AllowAny])
