@@ -26,10 +26,40 @@ class CategoryDetail(generics.RetrieveUpdateDestroyAPIView):
 
 # ── Properties ──
 class PropertyList(generics.ListCreateAPIView):
-    queryset = Property.objects.filter(active=True)
     serializer_class = PropertySerializer
     name = 'properties-list'
     permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get_queryset(self):
+        qs = Property.objects.filter(active=True)
+
+        city = self.request.query_params.get('city', '').strip()
+        if city:
+            qs = qs.filter(city__city_name__icontains=city)
+
+        guests = self.request.query_params.get('guests', '')
+        if guests:
+            try:
+                qs = qs.filter(max_guests__gte=int(guests))
+            except ValueError:
+                pass
+
+        property_type = self.request.query_params.get('property_type', '').strip()
+        if property_type and property_type != 'All':
+            qs = qs.filter(category__category_name__icontains=property_type)
+
+        check_in  = self.request.query_params.get('check_in', '')
+        check_out = self.request.query_params.get('check_out', '')
+        if check_in and check_out:
+            from django.db.models import Q
+            booked_ids = Booking.objects.filter(
+                status__in=['confirmed', 'paid'],
+                check_in__lt=check_out,
+                check_out__gt=check_in,
+            ).values_list('property_id', flat=True)
+            qs = qs.exclude(pk__in=booked_ids)
+
+        return qs
 
     def create(self, request, *args, **kwargs):
         data = request.data
