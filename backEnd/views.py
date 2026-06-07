@@ -90,14 +90,11 @@ class PropertyList(generics.ListCreateAPIView):
         city_name_val = data.get('city_name', '').strip()
 
         if city_val:
-            # Use existing DB city by ID
             try:
                 city = City.objects.get(pk=int(city_val))
             except (City.DoesNotExist, ValueError, TypeError):
                 return Response({'error': f'Ville ID {city_val} introuvable.'}, status=400)
         elif city_name_val:
-            # Auto-create (or get) the city from the name + coordinates
-            # get_or_create doesn't support __ lookups, so we do it manually
             city = City.objects.filter(city_name__iexact=city_name_val).first()
             if not city:
                 city = City.objects.create(
@@ -220,7 +217,8 @@ def property_images_upload(request, pk):
         if not image_file.content_type.startswith('image/'):
             continue
         img = PropertyImage.objects.create(property=prop, image=image_file)
-        created_images.append(PropertyImageSerializer(img).data)
+        # ✅ FIX: passer request dans le contexte pour avoir l'URL absolue
+        created_images.append(PropertyImageSerializer(img, context={'request': request}).data)
 
     return Response({'images': created_images}, status=201)
 
@@ -238,7 +236,7 @@ def property_image_delete(request, pk, img_pk):
         )
 
     img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
-    img.image.delete(save=False)  # remove file from storage
+    img.image.delete(save=False)
     img.delete()
     return Response(status=204)
 
@@ -257,22 +255,18 @@ def property_set_cover(request, pk, img_pk):
 
     img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
 
-    # Swap: old cover becomes a PropertyImage, new cover becomes Property.image
     old_cover = prop.image
     new_cover = img.image
 
-    # Save the new file to Property.image field
     prop.image = new_cover
     prop.save(update_fields=['image'])
 
-    # Replace the PropertyImage file with the old cover (if there was one)
     if old_cover:
         img.image = old_cover
         img.save(update_fields=['image'])
     else:
         img.delete()
 
-    serializer = PropertyImageSerializer(img if old_cover else None)
     return Response({'message': 'Cover updated.'}, status=200)
 
 
@@ -331,6 +325,40 @@ def nearby_all(request):
     return Response(data)
 
 
+# ── Helpers ──
+def _build_image_url(request, url):
+    """Retourne une URL absolue pour une image (corrige le problème multi-appareil)."""
+    if not url:
+        return None
+    if url.startswith('http'):
+        return url
+    return request.build_absolute_uri(url)
+
+
+def _serialize_booking(b, request):
+    """Sérialise un booking avec des URLs d'images absolues."""
+    return {
+        'id':            b.id,
+        'property_id':   b.property.pk,
+        'property_name': b.property.property_name,
+        # ✅ FIX: URL absolue — visible depuis n'importe quel appareil
+        'property_image': _build_image_url(
+            request,
+            b.property.image.url if b.property.image else None
+        ),
+        # ✅ FIX: URLs absolues pour toutes les images supplémentaires
+        'property_images': [
+            _build_image_url(request, img.image.url)
+            for img in b.property.images.all() if img.image
+        ],
+        'check_in':      str(b.check_in),
+        'check_out':     str(b.check_out),
+        'total_price':   str(b.total_price),
+        'status':        b.status,
+        'created_at':    str(b.created_at),
+    }
+
+
 # ── Bookings ──
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticatedOrReadOnly])
@@ -339,26 +367,14 @@ def booking_create(request):
         if not request.user or not request.user.is_authenticated:
             return Response({'error': 'Authentication credentials were not provided.'}, status=401)
 
-        bookings = Booking.objects.filter(user=request.user).select_related('property').prefetch_related('property__images').order_by('-created_at')
-        data = [
-            {
-                'id':            b.id,
-                'property_id':   b.property.pk,
-                'property_name': b.property.property_name,
-                'property_image': (
-                    b.property.image.url if b.property.image else None
-                ),
-                'property_images': [
-                    img.image.url for img in b.property.images.all() if img.image
-                ],
-                'check_in':      str(b.check_in),
-                'check_out':     str(b.check_out),
-                'total_price':   str(b.total_price),
-                'status':        b.status,
-                'created_at':    str(b.created_at),
-            }
-            for b in bookings
-        ]
+        bookings = (
+            Booking.objects
+            .filter(user=request.user)
+            .select_related('property')
+            .prefetch_related('property__images')
+            .order_by('-created_at')
+        )
+        data = [_serialize_booking(b, request) for b in bookings]
         return Response(data)
 
     # POST — create a booking
@@ -374,7 +390,6 @@ def booking_create(request):
 
     prop = get_object_or_404(Property, pk=property_id, active=True)
 
-    # ✅ Block host from booking their own property
     if request.user == prop.owner:
         return Response(
             {'error': 'You cannot book your own property.'},
@@ -397,26 +412,14 @@ def booking_create(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticatedOrReadOnly])
 def booking_list(request):
-    bookings = Booking.objects.filter(user=request.user).select_related('property').prefetch_related('property__images').order_by('-created_at')
-    data = [
-        {
-            'id':            b.id,
-            'property_id':   b.property.pk,
-            'property_name': b.property.property_name,
-            'property_image': (
-                b.property.image.url if b.property.image else None
-            ),
-            'property_images': [
-                img.image.url for img in b.property.images.all() if img.image
-            ],
-            'check_in':      str(b.check_in),
-            'check_out':     str(b.check_out),
-            'total_price':   str(b.total_price),
-            'status':        b.status,
-            'created_at':    str(b.created_at),
-        }
-        for b in bookings
-    ]
+    bookings = (
+        Booking.objects
+        .filter(user=request.user)
+        .select_related('property')
+        .prefetch_related('property__images')
+        .order_by('-created_at')
+    )
+    data = [_serialize_booking(b, request) for b in bookings]
     return Response(data)
 
 
