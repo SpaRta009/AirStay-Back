@@ -1,4 +1,4 @@
-from .models import Property, Category, City, User, Booking, PropertyImage
+from .models import Property, Category, City, User, Booking, PropertyImage, Wishlist
 from .serializers import CategorySerializer, CitySerializer, PropertySerializer, BookingSerializer, PropertyImageSerializer
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny
@@ -494,3 +494,41 @@ def login_view(request):
         return Response({'error': 'Mot de passe incorrect.'}, status=400)
     except User.DoesNotExist:
         return Response({'error': 'Aucun compte trouvé avec cet email.'}, status=400)
+
+
+# ── Wishlist ──
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def wishlist_list(request):
+    """Retourne la liste des IDs de propriétés sauvegardées par l'utilisateur."""
+    if not request.user.is_authenticated:
+        return Response({'error': 'Authentication required.'}, status=401)
+
+    ids = list(
+        Wishlist.objects
+        .filter(user=request.user)
+        .values_list('property_id', flat=True)
+    )
+    return Response({'favorites': ids})
+
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def wishlist_toggle(request, property_id):
+    """
+    POST   → ajoute la propriété à la wishlist (idempotent)
+    DELETE → retire la propriété de la wishlist
+    """
+    if not request.user.is_authenticated:
+        return Response({'error': 'Authentication required.'}, status=401)
+
+    prop = get_object_or_404(Property, pk=property_id, active=True)
+
+    if request.method == 'POST':
+        _, created = Wishlist.objects.get_or_create(user=request.user, property=prop)
+        return Response({'added': True, 'created': created}, status=201 if created else 200)
+
+    # DELETE
+    deleted, _ = Wishlist.objects.filter(user=request.user, property=prop).delete()
+    return Response({'removed': deleted > 0}, status=200)
