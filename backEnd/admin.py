@@ -1,6 +1,5 @@
 from django.contrib.gis import admin
-from .models import Category, Property, City, Booking, User, PropertyImage
-
+from .models import Category, Property, City, Booking, User, PropertyImage, Wishlist
 # Register your models here.
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
@@ -43,3 +42,9 @@ class BookingAdmin(admin.ModelAdmin):
 class PropertyImageAdmin(admin.ModelAdmin):
     list_display = ['property', 'image']
     search_fields = ['property__property_name']
+
+@admin.register(Wishlist)
+class WishlistAdmin(admin.ModelAdmin):
+    list_display = ['user', 'property', 'created_at']
+    search_fields = ['user__username', 'property__property_name']
+    list_filter = ['created_at']
