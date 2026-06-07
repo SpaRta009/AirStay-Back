@@ -3,7 +3,8 @@ from . import views
 from django.conf.urls import include
 from rest_framework.urlpatterns import format_suffix_patterns
 
-urlpatterns = [
+# ✅ Routes principales (avec format suffix pour la compatibilité DRF)
+api_urlpatterns = [
     path("categories/",              views.CategoryList.as_view(),   name=views.CategoryList.name),
     path("categories/<int:pk>/",     views.CategoryDetail.as_view(), name=views.CategoryDetail.name),
     path("properties/",              views.PropertyList.as_view(),   name=views.PropertyList.name),
@@ -24,11 +25,14 @@ urlpatterns = [
     path("bookings/",                views.booking_create,           name="booking-create"),
     path("bookings/list/",           views.booking_list,             name="booking-list"),
 
-    # ✅ NOUVEAU : Wishlist endpoints
-    path("wishlist/",                views.wishlist_list,            name="wishlist-list"),
-    path("wishlist/<int:property_id>/", views.wishlist_toggle,       name="wishlist-toggle"),
-
     path("api-auth/",                include("rest_framework.urls")),
 ]
 
-urlpatterns = format_suffix_patterns(urlpatterns)
+# ✅ Routes wishlist séparées — exclues de format_suffix_patterns
+# pour éviter que DELETE /wishlist/5/ soit interprété comme un format suffix
+wishlist_urlpatterns = [
+    path("wishlist/",                    views.wishlist_list,    name="wishlist-list"),
+    path("wishlist/<int:property_id>/",  views.wishlist_toggle,  name="wishlist-toggle"),
+]
+
+urlpatterns = format_suffix_patterns(api_urlpatterns) + wishlist_urlpatterns
