@@ -9,7 +9,6 @@ urlpatterns = [
     path("properties/",              views.PropertyList.as_view(),   name=views.PropertyList.name),
     path("properties/<int:pk>/",     views.PropertyDetail.as_view(), name=views.PropertyDetail.name),
 
-    # ✅ NOUVEAU : nearby depuis une property
     path("properties/<int:pk>/nearby/", views.property_nearby,      name="property-nearby"),
 
     path("cities/",                  views.CityList.as_view(),       name=views.CityList.name),
@@ -18,13 +17,17 @@ urlpatterns = [
     path("properties/<int:pk>/images/<int:img_pk>/delete/", views.property_image_delete, name="property-image-delete"),
     path("properties/<int:pk>/images/<int:img_pk>/set-cover/", views.property_set_cover, name="property-set-cover"),
 
-    # ✅ NOUVEAU : nearby depuis des coordonnées GPS
     path("nearby-all/",              views.nearby_all,               name="nearby-all"),
 
     path("auth/register/",           views.register,                 name="register"),
     path("auth/login/",              views.login_view,               name="login"),
     path("bookings/",                views.booking_create,           name="booking-create"),
     path("bookings/list/",           views.booking_list,             name="booking-list"),
+
+    # ✅ NOUVEAU : Wishlist endpoints
+    path("wishlist/",                views.wishlist_list,            name="wishlist-list"),
+    path("wishlist/<int:property_id>/", views.wishlist_toggle,       name="wishlist-toggle"),
+
     path("api-auth/",                include("rest_framework.urls")),
 ]
 

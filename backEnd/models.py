@@ -102,14 +102,11 @@ class Booking(models.Model):
         if nights <= 0:
             raise ValidationError("Invalid booking duration")
 
-        # ✅ FIX: Only block overlap for confirmed or paid bookings.
-        # Multiple guests can send pending requests for the same dates —
-        # the host chooses who to confirm. Once confirmed/paid, it blocks others.
         overlapping = Booking.objects.filter(
             property=self.property,
             check_in__lt=self.check_out,
             check_out__gt=self.check_in,
-            status__in=['confirmed', 'paid'],  # removed 'pending'
+            status__in=['confirmed', 'paid'],
         ).exclude(pk=self.pk)
         if overlapping.exists():
             raise ValidationError("This property is already booked for these dates")
@@ -124,3 +121,18 @@ class PropertyImage(models.Model):
 
     def __str__(self):
         return f"{self.property.property_name} - Image"
+
+
+# ✅ NOUVEAU : Wishlist stockée en base de données
+class Wishlist(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='wishlist')
+    property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='wishlisted_by')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name_plural = 'Wishlists'
+        # Un utilisateur ne peut pas sauvegarder la même propriété deux fois
+        unique_together = ('user', 'property')
+
+    def __str__(self):
+        return f"{self.user.username} → {self.property.property_name}"
