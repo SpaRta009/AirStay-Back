@@ -1,4 +1,4 @@
-from .models import Category, Property, City, Booking, User, PropertyImage
+from .models import Category, Notification, Property, City, Booking, User, PropertyImage
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 
@@ -204,3 +204,17 @@ class BookingSerializer(serializers.ModelSerializer):
                 )
 
         return data
+    
+class NotificationSerializer(serializers.ModelSerializer):
+    property_id   = serializers.IntegerField(source='property.pk', read_only=True, allow_null=True)
+    property_name = serializers.CharField(source='property.property_name', read_only=True, allow_null=True)
+    booking_id    = serializers.IntegerField(source='booking.pk', read_only=True, allow_null=True)
+ 
+    class Meta:
+        model  = Notification
+        fields = (
+            'id', 'type', 'title', 'message',
+            'property_id', 'property_name', 'booking_id',
+            'is_read', 'created_at',
+        )
+        read_only_fields = fields
