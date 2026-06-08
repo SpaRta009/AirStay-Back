@@ -542,34 +542,175 @@ def wishlist_toggle(request, property_id):
     deleted, _ = Wishlist.objects.filter(user=request.user, property=prop).delete()
     return Response({'removed': deleted > 0}, status=200)
 
+# ── Helper: create a notification ──
+def create_notification(user, notif_type, title, message, property_obj=None, booking_obj=None):
+    Notification.objects.create(
+        user=user,
+        type=notif_type,
+        title=title,
+        message=message,
+        property=property_obj,
+        booking=booking_obj,
+    )
+ 
+ 
+# ── GET /notifications/  — list all notifications for current user ──
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def notification_list(request):
     notifs = Notification.objects.filter(user=request.user).order_by('-created_at')[:50]
     serializer = NotificationSerializer(notifs, many=True)
     return Response(serializer.data)
-
-
+ 
+ 
+# ── POST /notifications/<id>/read/  — mark one as read ──
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def notification_mark_read(request, pk):
-    notif = get_object_or_404(Notification, pk=pk, user=request.user)
-    notif.is_read = True
-    notif.save(update_fields=['is_read'])
-    return Response({'status': 'ok'})
-
-
+    try:
+        notif = Notification.objects.get(pk=pk, user=request.user)
+        notif.is_read = True
+        notif.save(update_fields=['is_read'])
+        return Response({'status': 'ok'})
+    except Notification.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+ 
+ 
+# ── POST /notifications/read-all/  — mark all as read ──
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def notification_mark_all_read(request):
     Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
     return Response({'status': 'ok'})
-
-
+ 
+ 
+# ── DELETE /notifications/<id>/  — dismiss a notification ──
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
 def notification_delete(request, pk):
-    notif = get_object_or_404(Notification, pk=pk, user=request.user)
-    notif.delete()
+    Notification.objects.filter(pk=pk, user=request.user).delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
+ 
+ 
+# ── GET /properties/<pk>/bookings/  — list bookings for a property (host only) ──
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def property_bookings(request, pk):
+    from .models import Property, Booking
+    try:
+        property_obj = Property.objects.get(pk=pk)
+    except Property.DoesNotExist:
+        return Response({'error': 'Property not found'}, status=404)
+ 
+    if property_obj.owner != request.user:
+        return Response({'error': 'Forbidden'}, status=403)
+ 
+    bookings = Booking.objects.filter(property=property_obj).select_related('user').order_by('-created_at')
+ 
+    # Auto-expire pending bookings older than 48 hours
+    cutoff = timezone.now() - timedelta(hours=48)
+    expired_qs = bookings.filter(status='pending', created_at__lt=cutoff)
+    for booking in expired_qs:
+        booking.status = 'canceled'
+        booking.save(update_fields=['status'])
+        # Notify host
+        create_notification(
+            request.user, 'booking_expired',
+            'Booking request expired',
+            f'Booking #{booking.id} from {booking.user.username} expired without response.',
+            property_obj, booking
+        )
+        # Notify guest
+        create_notification(
+            booking.user, 'booking_expired',
+            'Booking request expired',
+            f'Your request for {property_obj.property_name} expired — no response within 48 hours.',
+            property_obj, booking
+        )
+ 
+    data = []
+    for b in bookings.order_by('-created_at'):
+        data.append({
+            'id': b.id,
+            'user': {'id': b.user.id, 'username': b.user.username},
+            'check_in': str(b.check_in),
+            'check_out': str(b.check_out),
+            'total_price': str(b.total_price),
+            'status': b.status,
+            'created_at': b.created_at.isoformat(),
+        })
+    return Response(data)
+ 
+ 
+# ── PATCH /bookings/<id>/status/  — confirm or cancel a booking (host only) ──
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def booking_update_status(request, pk):
+    from .models import Booking
+    try:
+        booking = Booking.objects.select_related('property', 'user').get(pk=pk)
+    except Booking.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+ 
+    # Only the property owner can change booking status
+    if booking.property.owner != request.user:
+        return Response({'error': 'Forbidden'}, status=403)
+ 
+    new_status = request.data.get('status')
+    allowed = ['confirmed', 'canceled', 'completed']
+    if new_status not in allowed:
+        return Response({'error': f'Status must be one of {allowed}'}, status=400)
+ 
+    booking.status = new_status
+    booking.save(update_fields=['status'])
+ 
+    prop = booking.property
+    guest = booking.user
+    host  = request.user
+ 
+    if new_status == 'confirmed':
+        # Notify guest
+        create_notification(
+            guest, 'booking_confirmed',
+            'Booking confirmed! 🎉',
+            f'Your reservation at {prop.property_name} ({booking.check_in} → {booking.check_out}) has been confirmed.',
+            prop, booking
+        )
+        # Notify host
+        create_notification(
+            host, 'booking_confirmed',
+            'You confirmed a booking',
+            f'You confirmed the booking from {guest.username} at {prop.property_name}.',
+            prop, booking
+        )
+ 
+    elif new_status == 'canceled':
+        create_notification(
+            guest, 'booking_canceled',
+            'Booking declined',
+            f'Your reservation request at {prop.property_name} was declined by the host.',
+            prop, booking
+        )
+        create_notification(
+            host, 'booking_canceled',
+            'Booking declined',
+            f'You declined the reservation from {guest.username}.',
+            prop, booking
+        )
+ 
+    elif new_status == 'completed':
+        create_notification(
+            guest, 'booking_completed',
+            'Stay completed',
+            f'We hope you enjoyed your stay at {prop.property_name}! Leave a review.',
+            prop, booking
+        )
+        create_notification(
+            host, 'booking_completed',
+            'Stay completed',
+            f'{guest.username} has checked out from {prop.property_name}.',
+            prop, booking
+        )
+ 
+    return Response({'status': new_status})
 
