@@ -10,6 +10,15 @@ from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.geos import Point
 from django.contrib.gis.measure import D
 from django.shortcuts import get_object_or_404
+# ── Imports to add at the top of views.py ──
+from .models import Notification
+from .serializers import NotificationSerializer
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from django.utils import timezone
+from datetime import timedelta
 
 
 # ── Categories ──
@@ -532,3 +541,35 @@ def wishlist_toggle(request, property_id):
     # DELETE
     deleted, _ = Wishlist.objects.filter(user=request.user, property=prop).delete()
     return Response({'removed': deleted > 0}, status=200)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def notification_list(request):
+    notifs = Notification.objects.filter(user=request.user).order_by('-created_at')[:50]
+    serializer = NotificationSerializer(notifs, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def notification_mark_read(request, pk):
+    notif = get_object_or_404(Notification, pk=pk, user=request.user)
+    notif.is_read = True
+    notif.save(update_fields=['is_read'])
+    return Response({'status': 'ok'})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def notification_mark_all_read(request):
+    Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+    return Response({'status': 'ok'})
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def notification_delete(request, pk):
+    notif = get_object_or_404(Notification, pk=pk, user=request.user)
+    notif.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
