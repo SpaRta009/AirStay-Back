@@ -20,7 +20,27 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# ── Categories ──
+# ─────────────────────────────────────────
+# Helper: create a notification (safe)
+# ─────────────────────────────────────────
+def create_notification(user, notif_type, title, message, property_obj=None, booking_obj=None):
+    try:
+        Notification.objects.create(
+            user=user,
+            type=notif_type,
+            title=title,
+            message=message,
+            property=property_obj,
+            booking=booking_obj,
+        )
+        logger.info(f"[Notif] Created '{notif_type}' for user '{user.username}'")
+    except Exception as e:
+        logger.error(f"[Notif] Failed to create notification: {e}", exc_info=True)
+
+
+# ─────────────────────────────────────────
+# Categories
+# ─────────────────────────────────────────
 class CategoryList(generics.ListCreateAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
@@ -32,7 +52,9 @@ class CategoryDetail(generics.RetrieveUpdateDestroyAPIView):
     name = 'category-detail'
 
 
-# ── Properties ──
+# ─────────────────────────────────────────
+# Properties
+# ─────────────────────────────────────────
 class PropertyList(generics.ListCreateAPIView):
     serializer_class = PropertySerializer
     name = 'properties-list'
@@ -104,10 +126,7 @@ class PropertyList(generics.ListCreateAPIView):
         elif city_name_val:
             city = City.objects.filter(city_name__iexact=city_name_val).first()
             if not city:
-                city = City.objects.create(
-                    city_name=city_name_val,
-                    point_geom=point,
-                )
+                city = City.objects.create(city_name=city_name_val, point_geom=point)
         else:
             return Response({'error': 'city ou city_name est requis.'}, status=400)
 
@@ -154,7 +173,9 @@ class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
         return super().update(request, *args, **kwargs)
 
 
-# ── Cities ──
+# ─────────────────────────────────────────
+# Cities
+# ─────────────────────────────────────────
 class CityList(generics.ListAPIView):
     serializer_class = CitySerializer
     name = "cities-list"
@@ -176,7 +197,9 @@ class CityList(generics.ListAPIView):
         return qs[:10]
 
 
-# ── Nearby par property ID ──
+# ─────────────────────────────────────────
+# Nearby
+# ─────────────────────────────────────────
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def property_nearby(request, pk):
@@ -202,81 +225,6 @@ def property_nearby(request, pk):
     return Response(data)
 
 
-# ── Property images upload ──
-@api_view(['POST'])
-@permission_classes([IsAuthenticatedOrReadOnly])
-def property_images_upload(request, pk):
-    prop = get_object_or_404(Property, pk=pk, active=True)
-
-    if request.user != prop.owner:
-        return Response(
-            {'error': 'You do not have permission to upload images for this property.'},
-            status=403
-        )
-
-    if not request.FILES:
-        return Response({'error': 'No images provided.'}, status=400)
-
-    images = request.FILES.getlist('image')
-    created_images = []
-
-    for image_file in images:
-        if not image_file.content_type.startswith('image/'):
-            continue
-        img = PropertyImage.objects.create(property=prop, image=image_file)
-        created_images.append(PropertyImageSerializer(img, context={'request': request}).data)
-
-    return Response({'images': created_images}, status=201)
-
-
-# ── Delete a single PropertyImage ──
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticatedOrReadOnly])
-def property_image_delete(request, pk, img_pk):
-    prop = get_object_or_404(Property, pk=pk, active=True)
-
-    if request.user != prop.owner:
-        return Response(
-            {'error': 'You do not have permission to delete images for this property.'},
-            status=403
-        )
-
-    img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
-    img.image.delete(save=False)
-    img.delete()
-    return Response(status=204)
-
-
-# ── Set cover image ──
-@api_view(['PATCH'])
-@permission_classes([IsAuthenticatedOrReadOnly])
-def property_set_cover(request, pk, img_pk):
-    prop = get_object_or_404(Property, pk=pk, active=True)
-
-    if request.user != prop.owner:
-        return Response(
-            {'error': 'You do not have permission to edit this property.'},
-            status=403
-        )
-
-    img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
-
-    old_cover = prop.image
-    new_cover = img.image
-
-    prop.image = new_cover
-    prop.save(update_fields=['image'])
-
-    if old_cover:
-        img.image = old_cover
-        img.save(update_fields=['image'])
-    else:
-        img.delete()
-
-    return Response({'message': 'Cover updated.'}, status=200)
-
-
-# ── Nearby par coordonnées GPS ──
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def nearby_all(request):
@@ -331,117 +279,74 @@ def nearby_all(request):
     return Response(data)
 
 
-# ── Helpers ──
-def _build_image_url(request, url):
-    if not url:
-        return None
-    if url.startswith('http'):
-        return url
-    return request.build_absolute_uri(url)
-
-
-def _serialize_booking(b, request):
-    return {
-        'id':            b.id,
-        'property_id':   b.property.pk,
-        'property_name': b.property.property_name,
-        'property_image': _build_image_url(
-            request,
-            b.property.image.url if b.property.image else None
-        ),
-        'property_images': [
-            _build_image_url(request, img.image.url)
-            for img in b.property.images.all() if img.image
-        ],
-        'check_in':      str(b.check_in),
-        'check_out':     str(b.check_out),
-        'total_price':   str(b.total_price),
-        'status':        b.status,
-        'created_at':    str(b.created_at),
-    }
-
-
-# ── Helper: create a notification ──
-def create_notification(user, notif_type, title, message, property_obj=None, booking_obj=None):
-    try:
-        Notification.objects.create(
-            user=user,
-            type=notif_type,
-            title=title,
-            message=message,
-            property=property_obj,
-            booking=booking_obj,
-        )
-    except Exception as e:
-        logger.error(f"[create_notification] Failed: {e}", exc_info=True)
-
-
-# ── Bookings ──
-@api_view(['GET', 'POST'])
+# ─────────────────────────────────────────
+# Property Images
+# ─────────────────────────────────────────
+@api_view(['POST'])
 @permission_classes([IsAuthenticatedOrReadOnly])
-def booking_create(request):
-    if request.method == 'GET':
-        if not request.user or not request.user.is_authenticated:
-            return Response({'error': 'Authentication credentials were not provided.'}, status=401)
+def property_images_upload(request, pk):
+    prop = get_object_or_404(Property, pk=pk, active=True)
 
-        bookings = (
-            Booking.objects
-            .filter(user=request.user)
-            .select_related('property')
-            .prefetch_related('property__images')
-            .order_by('-created_at')
-        )
-        data = [_serialize_booking(b, request) for b in bookings]
-        return Response(data)
+    if request.user != prop.owner:
+        return Response({'error': 'You do not have permission to upload images for this property.'}, status=403)
 
-    # POST — create a booking
-    property_id = request.data.get('property_id')
-    check_in    = request.data.get('check_in')
-    check_out   = request.data.get('check_out')
+    if not request.FILES:
+        return Response({'error': 'No images provided.'}, status=400)
 
-    if not property_id or not check_in or not check_out:
-        return Response(
-            {'error': 'property_id, check_in et check_out sont requis.'},
-            status=400
-        )
+    images = request.FILES.getlist('image')
+    created_images = []
 
-    prop = get_object_or_404(Property, pk=property_id, active=True)
+    for image_file in images:
+        if not image_file.content_type.startswith('image/'):
+            continue
+        img = PropertyImage.objects.create(property=prop, image=image_file)
+        created_images.append(PropertyImageSerializer(img, context={'request': request}).data)
 
-    if request.user == prop.owner:
-        return Response(
-            {'error': 'You cannot book your own property.'},
-            status=400
-        )
-
-    serializer = BookingSerializer(data={
-        'property': prop.pk,
-        'check_in': check_in,
-        'check_out': check_out,
-    }, context={'request': request})
-
-    if serializer.is_valid():
-        booking = serializer.save(user=request.user, property=prop)
-        # ── Signal will fire and create notifications for host + guest ──
-        return Response(BookingSerializer(booking).data, status=201)
-
-    return Response(serializer.errors, status=400)
+    return Response({'images': created_images}, status=201)
 
 
-@api_view(['GET'])
+@api_view(['DELETE'])
 @permission_classes([IsAuthenticatedOrReadOnly])
-def booking_list(request):
-    bookings = (
-        Booking.objects
-        .filter(user=request.user)
-        .select_related('property')
-        .prefetch_related('property__images')
-        .order_by('-created_at')
-    )
-    data = [_serialize_booking(b, request) for b in bookings]
-    return Response(data)
+def property_image_delete(request, pk, img_pk):
+    prop = get_object_or_404(Property, pk=pk, active=True)
+
+    if request.user != prop.owner:
+        return Response({'error': 'You do not have permission to delete images for this property.'}, status=403)
+
+    img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
+    img.image.delete(save=False)
+    img.delete()
+    return Response(status=204)
 
 
-# ── Auth ──
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def property_set_cover(request, pk, img_pk):
+    prop = get_object_or_404(Property, pk=pk, active=True)
+
+    if request.user != prop.owner:
+        return Response({'error': 'You do not have permission to edit this property.'}, status=403)
+
+    img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
+
+    old_cover = prop.image
+    new_cover = img.image
+
+    prop.image = new_cover
+    prop.save(update_fields=['image'])
+
+    if old_cover:
+        img.image = old_cover
+        img.save(update_fields=['image'])
+    else:
+        img.delete()
+
+    return Response({'message': 'Cover updated.'}, status=200)
+
+
+# ─────────────────────────────────────────
+# Auth
+# ─────────────────────────────────────────
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
@@ -514,7 +419,9 @@ def login_view(request):
         return Response({'error': 'Aucun compte trouvé avec cet email.'}, status=400)
 
 
-# ── Wishlist ──
+# ─────────────────────────────────────────
+# Wishlist
+# ─────────────────────────────────────────
 @api_view(['GET'])
 @permission_classes([IsAuthenticatedOrReadOnly])
 def wishlist_list(request):
@@ -545,7 +452,125 @@ def wishlist_toggle(request, property_id):
     return Response({'removed': deleted > 0}, status=200)
 
 
-# ── Notifications ──
+# ─────────────────────────────────────────
+# Bookings
+# ─────────────────────────────────────────
+def _build_image_url(request, url):
+    if not url:
+        return None
+    if url.startswith('http'):
+        return url
+    return request.build_absolute_uri(url)
+
+
+def _serialize_booking(b, request):
+    return {
+        'id':             b.id,
+        'property_id':    b.property.pk,
+        'property_name':  b.property.property_name,
+        'property_image': _build_image_url(
+            request,
+            b.property.image.url if b.property.image else None
+        ),
+        'property_images': [
+            _build_image_url(request, img.image.url)
+            for img in b.property.images.all() if img.image
+        ],
+        'check_in':    str(b.check_in),
+        'check_out':   str(b.check_out),
+        'total_price': str(b.total_price),
+        'status':      b.status,
+        'created_at':  str(b.created_at),
+    }
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def booking_create(request):
+    if request.method == 'GET':
+        if not request.user or not request.user.is_authenticated:
+            return Response({'error': 'Authentication credentials were not provided.'}, status=401)
+
+        bookings = (
+            Booking.objects
+            .filter(user=request.user)
+            .select_related('property')
+            .prefetch_related('property__images')
+            .order_by('-created_at')
+        )
+        data = [_serialize_booking(b, request) for b in bookings]
+        return Response(data)
+
+    # POST — create a booking
+    property_id = request.data.get('property_id')
+    check_in    = request.data.get('check_in')
+    check_out   = request.data.get('check_out')
+
+    if not property_id or not check_in or not check_out:
+        return Response({'error': 'property_id, check_in et check_out sont requis.'}, status=400)
+
+    prop = get_object_or_404(Property, pk=property_id, active=True)
+
+    if request.user == prop.owner:
+        return Response({'error': 'You cannot book your own property.'}, status=400)
+
+    serializer = BookingSerializer(data={
+        'property': prop.pk,
+        'check_in': check_in,
+        'check_out': check_out,
+    }, context={'request': request})
+
+    if serializer.is_valid():
+        booking = serializer.save(user=request.user, property=prop)
+
+        # ── Notify HOST: new booking request ──
+        create_notification(
+            user=prop.owner,
+            notif_type='booking_request',
+            title=f'New booking request from {request.user.username}',
+            message=(
+                f'{request.user.username} wants to book {prop.property_name} '
+                f'from {check_in} to {check_out}.'
+            ),
+            property_obj=prop,
+            booking_obj=booking,
+        )
+        # ── Notify GUEST: request sent ──
+        create_notification(
+            user=request.user,
+            notif_type='booking_confirmed',
+            title='Booking request sent! ✅',
+            message=(
+                f'Your request for {prop.property_name} '
+                f'from {check_in} to {check_out} '
+                f'has been sent. Waiting for host confirmation.'
+            ),
+            property_obj=prop,
+            booking_obj=booking,
+        )
+
+        return Response(BookingSerializer(booking).data, status=201)
+
+    return Response(serializer.errors, status=400)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def booking_list(request):
+    bookings = (
+        Booking.objects
+        .filter(user=request.user)
+        .select_related('property')
+        .prefetch_related('property__images')
+        .order_by('-created_at')
+    )
+    data = [_serialize_booking(b, request) for b in bookings]
+    return Response(data)
+
+
+# ─────────────────────────────────────────
+# Notifications
+# ─────────────────────────────────────────
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def notification_list(request):
@@ -583,7 +608,9 @@ def notification_delete(request, pk):
     return Response(status=204)
 
 
-# ── GET /properties/<pk>/bookings/ — list bookings for a property (host only) ──
+# ─────────────────────────────────────────
+# Property Bookings (host management)
+# ─────────────────────────────────────────
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def property_bookings(request, pk):
@@ -597,33 +624,42 @@ def property_bookings(request, pk):
 
     # Auto-expire pending bookings older than 48 hours
     cutoff = timezone.now() - timedelta(hours=48)
-    expired_bookings = Booking.objects.filter(
-        property=property_obj,
-        status='pending',
-        created_at__lt=cutoff
-    ).select_related('user')
+    expired_bookings = list(
+        Booking.objects.filter(
+            property=property_obj,
+            status='pending',
+            created_at__lt=cutoff
+        ).select_related('user')
+    )
 
     for booking in expired_bookings:
-        # Use queryset update to avoid triggering the signal
         Booking.objects.filter(pk=booking.pk).update(status='canceled')
         create_notification(
-            request.user, 'booking_expired',
-            'Booking request expired',
-            f'Booking #{booking.id} from {booking.user.username} expired without response.',
-            property_obj, booking
+            user=request.user,
+            notif_type='booking_expired',
+            title='Booking request expired',
+            message=f'Booking #{booking.id} from {booking.user.username} expired without response.',
+            property_obj=property_obj,
+            booking_obj=booking,
         )
         create_notification(
-            booking.user, 'booking_expired',
-            'Booking request expired',
-            f'Your request for {property_obj.property_name} expired — no response within 48 hours.',
-            property_obj, booking
+            user=booking.user,
+            notif_type='booking_expired',
+            title='Booking request expired',
+            message=f'Your request for {property_obj.property_name} expired — no response within 48 hours.',
+            property_obj=property_obj,
+            booking_obj=booking,
         )
 
-    bookings = Booking.objects.filter(property=property_obj).select_related('user').order_by('-created_at')
+    bookings = (
+        Booking.objects
+        .filter(property=property_obj)
+        .select_related('user')
+        .order_by('-created_at')
+    )
 
-    data = []
-    for b in bookings:
-        data.append({
+    data = [
+        {
             'id': b.id,
             'user': {'id': b.user.id, 'username': b.user.username},
             'check_in': str(b.check_in),
@@ -631,11 +667,12 @@ def property_bookings(request, pk):
             'total_price': str(b.total_price),
             'status': b.status,
             'created_at': b.created_at.isoformat(),
-        })
+        }
+        for b in bookings
+    ]
     return Response(data)
 
 
-# ── PATCH /bookings/<id>/status/ — confirm or cancel a booking (host only) ──
 @api_view(['PATCH'])
 @permission_classes([IsAuthenticated])
 def booking_update_status(request, pk):
@@ -652,7 +689,7 @@ def booking_update_status(request, pk):
     if not new_status or new_status not in allowed:
         return Response({'error': f'Status must be one of {allowed}'}, status=400)
 
-    # Use queryset update to avoid triggering Booking.save() / signal
+    # Direct DB update — avoids triggering Booking.save() / signal
     Booking.objects.filter(pk=pk).update(status=new_status)
     booking.refresh_from_db()
 
@@ -662,44 +699,56 @@ def booking_update_status(request, pk):
 
     if new_status == 'confirmed':
         create_notification(
-            guest, 'booking_confirmed',
-            'Booking confirmed! 🎉',
-            f'Your reservation at {prop.property_name} ({booking.check_in} → {booking.check_out}) has been confirmed.',
-            prop, booking
+            user=guest,
+            notif_type='booking_confirmed',
+            title='Booking confirmed! 🎉',
+            message=f'Your reservation at {prop.property_name} ({booking.check_in} → {booking.check_out}) has been confirmed.',
+            property_obj=prop,
+            booking_obj=booking,
         )
         create_notification(
-            host, 'booking_confirmed',
-            'You confirmed a booking',
-            f'You confirmed the booking from {guest.username} at {prop.property_name}.',
-            prop, booking
+            user=host,
+            notif_type='booking_confirmed',
+            title='You confirmed a booking',
+            message=f'You confirmed the booking from {guest.username} at {prop.property_name}.',
+            property_obj=prop,
+            booking_obj=booking,
         )
 
     elif new_status == 'canceled':
         create_notification(
-            guest, 'booking_canceled',
-            'Booking declined',
-            f'Your reservation request at {prop.property_name} was declined by the host.',
-            prop, booking
+            user=guest,
+            notif_type='booking_canceled',
+            title='Booking declined',
+            message=f'Your reservation request at {prop.property_name} was declined by the host.',
+            property_obj=prop,
+            booking_obj=booking,
         )
         create_notification(
-            host, 'booking_canceled',
-            'Booking declined',
-            f'You declined the reservation from {guest.username}.',
-            prop, booking
+            user=host,
+            notif_type='booking_canceled',
+            title='Booking declined',
+            message=f'You declined the reservation from {guest.username}.',
+            property_obj=prop,
+            booking_obj=booking,
         )
 
     elif new_status == 'completed':
         create_notification(
-            guest, 'booking_completed',
-            'Stay completed',
-            f'We hope you enjoyed your stay at {prop.property_name}! Leave a review.',
-            prop, booking
+            user=guest,
+            notif_type='booking_completed',
+            title='Stay completed 🎉',
+            message=f'We hope you enjoyed your stay at {prop.property_name}! Leave a review.',
+            property_obj=prop,
+            booking_obj=booking,
         )
         create_notification(
-            host, 'booking_completed',
-            'Stay completed',
-            f'{guest.username} has checked out from {prop.property_name}.',
-            prop, booking
+            user=host,
+            notif_type='booking_completed',
+            title='Stay completed',
+            message=f'{guest.username} has checked out from {prop.property_name}.',
+            property_obj=prop,
+            booking_obj=booking,
         )
 
     return Response({'status': new_status})
