@@ -136,3 +136,32 @@ class Wishlist(models.Model):
 
     def __str__(self):
         return f"{self.user.username} → {self.property.property_name}"
+    
+
+class Notification(models.Model):
+    NOTIF_TYPES = [
+        ('booking_request',   'Booking Request'),
+        ('booking_confirmed', 'Booking Confirmed'),
+        ('booking_canceled',  'Booking Canceled'),
+        ('booking_completed', 'Booking Completed'),
+        ('booking_expired',   'Booking Expired'),
+        ('checkin_reminder',  'Check-in Reminder'),
+        ('checkout_reminder', 'Checkout Reminder'),
+        ('booking_paid',      'Booking Paid'),
+    ]
+ 
+    user         = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    type         = models.CharField(max_length=30, choices=NOTIF_TYPES)
+    title        = models.CharField(max_length=120)
+    message      = models.TextField()
+    property     = models.ForeignKey(Property, on_delete=models.SET_NULL, null=True, blank=True)
+    booking      = models.ForeignKey(Booking,  on_delete=models.SET_NULL, null=True, blank=True)
+    is_read      = models.BooleanField(default=False)
+    created_at   = models.DateTimeField(auto_now_add=True)
+ 
+    class Meta:
+        verbose_name_plural = 'Notifications'
+        ordering = ['-created_at']
+ 
+    def __str__(self):
+        return f"{self.user.username} — {self.type}"
