@@ -558,9 +558,14 @@ def create_notification(user, notif_type, title, message, property_obj=None, boo
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def notification_list(request):
-    notifs = Notification.objects.filter(user=request.user).order_by('-created_at')[:50]
-    serializer = NotificationSerializer(notifs, many=True)
-    return Response(serializer.data)
+    try:
+        notifs = Notification.objects.filter(user=request.user).order_by('-created_at')[:50]
+        # ✅ FIX : Ajout indispensable de context={'request': request}
+        serializer = NotificationSerializer(notifs, many=True, context={'request': request})
+        return Response(serializer.data, status=200)
+    except Exception as e:
+        # ✅ Si un autre bug subsiste, il s'affichera dans l'onglet Network au lieu d'un crash 500
+        return Response({"error_debug": str(e)}, status=500)
  
  
 # ── POST /notifications/<id>/read/  — mark one as read ──
@@ -571,7 +576,7 @@ def notification_mark_read(request, pk):
         notif = Notification.objects.get(pk=pk, user=request.user)
         notif.is_read = True
         notif.save(update_fields=['is_read'])
-        return Response({'status': 'ok'})
+        return Response({'status': 'ok'}, status=200)
     except Notification.DoesNotExist:
         return Response({'error': 'Not found'}, status=404)
  
@@ -581,7 +586,7 @@ def notification_mark_read(request, pk):
 @permission_classes([IsAuthenticated])
 def notification_mark_all_read(request):
     Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
-    return Response({'status': 'ok'})
+    return Response({'status': 'ok'}, status=200)
  
  
 # ── DELETE /notifications/<id>/  — dismiss a notification ──
@@ -589,7 +594,8 @@ def notification_mark_all_read(request):
 @permission_classes([IsAuthenticated])
 def notification_delete(request, pk):
     Notification.objects.filter(pk=pk, user=request.user).delete()
-    return Response(status=status.HTTP_204_NO_CONTENT)
+    # ✅ FIX : Utilisation directe du code 204 brut pour éviter les conflits d'import de 'status'
+    return Response(status=204)
  
  
 # ── GET /properties/<pk>/bookings/  — list bookings for a property (host only) ──
