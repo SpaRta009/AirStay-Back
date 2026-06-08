@@ -1,7 +1,10 @@
-from .models import Property, Category, City, User, Booking, PropertyImage, Wishlist
-from .serializers import CategorySerializer, CitySerializer, PropertySerializer, BookingSerializer, PropertyImageSerializer
+from .models import Property, Category, City, User, Booking, PropertyImage, Wishlist, Notification
+from .serializers import (
+    CategorySerializer, CitySerializer, PropertySerializer,
+    BookingSerializer, PropertyImageSerializer, NotificationSerializer
+)
 from rest_framework import generics
-from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny
+from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
@@ -10,15 +13,11 @@ from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.geos import Point
 from django.contrib.gis.measure import D
 from django.shortcuts import get_object_or_404
-# ── Imports to add at the top of views.py ──
-from .models import Notification
-from .serializers import NotificationSerializer
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
 from django.utils import timezone
 from datetime import timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # ── Categories ──
@@ -60,7 +59,6 @@ class PropertyList(generics.ListCreateAPIView):
         check_in  = self.request.query_params.get('check_in', '')
         check_out = self.request.query_params.get('check_out', '')
         if check_in and check_out:
-            from django.db.models import Q
             booked_ids = Booking.objects.filter(
                 status__in=['confirmed', 'paid'],
                 check_in__lt=check_out,
@@ -226,7 +224,6 @@ def property_images_upload(request, pk):
         if not image_file.content_type.startswith('image/'):
             continue
         img = PropertyImage.objects.create(property=prop, image=image_file)
-        # ✅ FIX: passer request dans le contexte pour avoir l'URL absolue
         created_images.append(PropertyImageSerializer(img, context={'request': request}).data)
 
     return Response({'images': created_images}, status=201)
@@ -250,7 +247,7 @@ def property_image_delete(request, pk, img_pk):
     return Response(status=204)
 
 
-# ── Set cover image (promote a PropertyImage → Property.image) ──
+# ── Set cover image ──
 @api_view(['PATCH'])
 @permission_classes([IsAuthenticatedOrReadOnly])
 def property_set_cover(request, pk, img_pk):
@@ -336,7 +333,6 @@ def nearby_all(request):
 
 # ── Helpers ──
 def _build_image_url(request, url):
-    """Retourne une URL absolue pour une image (corrige le problème multi-appareil)."""
     if not url:
         return None
     if url.startswith('http'):
@@ -345,17 +341,14 @@ def _build_image_url(request, url):
 
 
 def _serialize_booking(b, request):
-    """Sérialise un booking avec des URLs d'images absolues."""
     return {
         'id':            b.id,
         'property_id':   b.property.pk,
         'property_name': b.property.property_name,
-        # ✅ FIX: URL absolue — visible depuis n'importe quel appareil
         'property_image': _build_image_url(
             request,
             b.property.image.url if b.property.image else None
         ),
-        # ✅ FIX: URLs absolues pour toutes les images supplémentaires
         'property_images': [
             _build_image_url(request, img.image.url)
             for img in b.property.images.all() if img.image
@@ -366,6 +359,21 @@ def _serialize_booking(b, request):
         'status':        b.status,
         'created_at':    str(b.created_at),
     }
+
+
+# ── Helper: create a notification ──
+def create_notification(user, notif_type, title, message, property_obj=None, booking_obj=None):
+    try:
+        Notification.objects.create(
+            user=user,
+            type=notif_type,
+            title=title,
+            message=message,
+            property=property_obj,
+            booking=booking_obj,
+        )
+    except Exception as e:
+        logger.error(f"[create_notification] Failed: {e}", exc_info=True)
 
 
 # ── Bookings ──
@@ -413,6 +421,7 @@ def booking_create(request):
 
     if serializer.is_valid():
         booking = serializer.save(user=request.user, property=prop)
+        # ── Signal will fire and create notifications for host + guest ──
         return Response(BookingSerializer(booking).data, status=201)
 
     return Response(serializer.errors, status=400)
@@ -506,11 +515,9 @@ def login_view(request):
 
 
 # ── Wishlist ──
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticatedOrReadOnly])
 def wishlist_list(request):
-    """Retourne la liste des IDs de propriétés sauvegardées par l'utilisateur."""
     if not request.user.is_authenticated:
         return Response({'error': 'Authentication required.'}, status=401)
 
@@ -525,10 +532,6 @@ def wishlist_list(request):
 @api_view(['POST', 'DELETE'])
 @permission_classes([IsAuthenticatedOrReadOnly])
 def wishlist_toggle(request, property_id):
-    """
-    POST   → ajoute la propriété à la wishlist (idempotent)
-    DELETE → retire la propriété de la wishlist
-    """
     if not request.user.is_authenticated:
         return Response({'error': 'Authentication required.'}, status=401)
 
@@ -538,37 +541,22 @@ def wishlist_toggle(request, property_id):
         _, created = Wishlist.objects.get_or_create(user=request.user, property=prop)
         return Response({'added': True, 'created': created}, status=201 if created else 200)
 
-    # DELETE
     deleted, _ = Wishlist.objects.filter(user=request.user, property=prop).delete()
     return Response({'removed': deleted > 0}, status=200)
 
-# ── Helper: create a notification ──
-def create_notification(user, notif_type, title, message, property_obj=None, booking_obj=None):
-    Notification.objects.create(
-        user=user,
-        type=notif_type,
-        title=title,
-        message=message,
-        property=property_obj,
-        booking=booking_obj,
-    )
- 
- 
-# ── GET /notifications/  — list all notifications for current user ──
+
+# ── Notifications ──
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def notification_list(request):
     try:
         notifs = Notification.objects.filter(user=request.user).order_by('-created_at')[:50]
-        # ✅ FIX : Ajout indispensable de context={'request': request}
         serializer = NotificationSerializer(notifs, many=True, context={'request': request})
         return Response(serializer.data, status=200)
     except Exception as e:
-        # ✅ Si un autre bug subsiste, il s'affichera dans l'onglet Network au lieu d'un crash 500
         return Response({"error_debug": str(e)}, status=500)
- 
- 
-# ── POST /notifications/<id>/read/  — mark one as read ──
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def notification_mark_read(request, pk):
@@ -579,63 +567,62 @@ def notification_mark_read(request, pk):
         return Response({'status': 'ok'}, status=200)
     except Notification.DoesNotExist:
         return Response({'error': 'Not found'}, status=404)
- 
- 
-# ── POST /notifications/read-all/  — mark all as read ──
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def notification_mark_all_read(request):
     Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
     return Response({'status': 'ok'}, status=200)
- 
- 
-# ── DELETE /notifications/<id>/  — dismiss a notification ──
+
+
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
 def notification_delete(request, pk):
     Notification.objects.filter(pk=pk, user=request.user).delete()
-    # ✅ FIX : Utilisation directe du code 204 brut pour éviter les conflits d'import de 'status'
     return Response(status=204)
- 
- 
-# ── GET /properties/<pk>/bookings/  — list bookings for a property (host only) ──
+
+
+# ── GET /properties/<pk>/bookings/ — list bookings for a property (host only) ──
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def property_bookings(request, pk):
-    from .models import Property, Booking
     try:
         property_obj = Property.objects.get(pk=pk)
     except Property.DoesNotExist:
         return Response({'error': 'Property not found'}, status=404)
- 
+
     if property_obj.owner != request.user:
         return Response({'error': 'Forbidden'}, status=403)
- 
-    bookings = Booking.objects.filter(property=property_obj).select_related('user').order_by('-created_at')
- 
+
     # Auto-expire pending bookings older than 48 hours
     cutoff = timezone.now() - timedelta(hours=48)
-    expired_qs = bookings.filter(status='pending', created_at__lt=cutoff)
-    for booking in expired_qs:
-        booking.status = 'canceled'
-        booking.save(update_fields=['status'])
-        # Notify host
+    expired_bookings = Booking.objects.filter(
+        property=property_obj,
+        status='pending',
+        created_at__lt=cutoff
+    ).select_related('user')
+
+    for booking in expired_bookings:
+        # Use queryset update to avoid triggering the signal
+        Booking.objects.filter(pk=booking.pk).update(status='canceled')
         create_notification(
             request.user, 'booking_expired',
             'Booking request expired',
             f'Booking #{booking.id} from {booking.user.username} expired without response.',
             property_obj, booking
         )
-        # Notify guest
         create_notification(
             booking.user, 'booking_expired',
             'Booking request expired',
             f'Your request for {property_obj.property_name} expired — no response within 48 hours.',
             property_obj, booking
         )
- 
+
+    bookings = Booking.objects.filter(property=property_obj).select_related('user').order_by('-created_at')
+
     data = []
-    for b in bookings.order_by('-created_at'):
+    for b in bookings:
         data.append({
             'id': b.id,
             'user': {'id': b.user.id, 'username': b.user.username},
@@ -646,50 +633,47 @@ def property_bookings(request, pk):
             'created_at': b.created_at.isoformat(),
         })
     return Response(data)
- 
- 
-# ── PATCH /bookings/<id>/status/  — confirm or cancel a booking (host only) ──
+
+
+# ── PATCH /bookings/<id>/status/ — confirm or cancel a booking (host only) ──
 @api_view(['PATCH'])
 @permission_classes([IsAuthenticated])
 def booking_update_status(request, pk):
-    from .models import Booking
     try:
         booking = Booking.objects.select_related('property', 'user').get(pk=pk)
     except Booking.DoesNotExist:
         return Response({'error': 'Not found'}, status=404)
- 
-    # Only the property owner can change booking status
+
     if booking.property.owner != request.user:
         return Response({'error': 'Forbidden'}, status=403)
- 
-    new_status = request.data.get('status')
+
+    new_status = request.data.get('status', '')
     allowed = ['confirmed', 'canceled', 'completed']
-    if new_status not in allowed:
+    if not new_status or new_status not in allowed:
         return Response({'error': f'Status must be one of {allowed}'}, status=400)
- 
-    booking.status = new_status
-    booking.save(update_fields=['status'])
- 
-    prop = booking.property
+
+    # Use queryset update to avoid triggering Booking.save() / signal
+    Booking.objects.filter(pk=pk).update(status=new_status)
+    booking.refresh_from_db()
+
+    prop  = booking.property
     guest = booking.user
     host  = request.user
- 
+
     if new_status == 'confirmed':
-        # Notify guest
         create_notification(
             guest, 'booking_confirmed',
             'Booking confirmed! 🎉',
             f'Your reservation at {prop.property_name} ({booking.check_in} → {booking.check_out}) has been confirmed.',
             prop, booking
         )
-        # Notify host
         create_notification(
             host, 'booking_confirmed',
             'You confirmed a booking',
             f'You confirmed the booking from {guest.username} at {prop.property_name}.',
             prop, booking
         )
- 
+
     elif new_status == 'canceled':
         create_notification(
             guest, 'booking_canceled',
@@ -703,7 +687,7 @@ def booking_update_status(request, pk):
             f'You declined the reservation from {guest.username}.',
             prop, booking
         )
- 
+
     elif new_status == 'completed':
         create_notification(
             guest, 'booking_completed',
@@ -717,6 +701,5 @@ def booking_update_status(request, pk):
             f'{guest.username} has checked out from {prop.property_name}.',
             prop, booking
         )
- 
-    return Response({'status': new_status})
 
+    return Response({'status': new_status})
