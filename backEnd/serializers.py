@@ -206,9 +206,9 @@ class BookingSerializer(serializers.ModelSerializer):
         return data
     
 class NotificationSerializer(serializers.ModelSerializer):
-    property_id   = serializers.IntegerField(source='property.pk', read_only=True, allow_null=True)
-    property_name = serializers.CharField(source='property.property_name', read_only=True, allow_null=True)
-    booking_id    = serializers.IntegerField(source='booking.pk', read_only=True, allow_null=True)
+    property_id   = serializers.SerializerMethodField()
+    property_name = serializers.SerializerMethodField()
+    booking_id    = serializers.SerializerMethodField()
  
     class Meta:
         model  = Notification
@@ -218,3 +218,13 @@ class NotificationSerializer(serializers.ModelSerializer):
             'is_read', 'created_at',
         )
         read_only_fields = fields
+
+    # On vérifie proprement si l'objet existe avant d'accéder à ses attributs
+    def get_property_id(self, obj):
+        return obj.property.pk if obj.property else None
+
+    def get_property_name(self, obj):
+        return obj.property.property_name if obj.property else None
+
+    def get_booking_id(self, obj):
+        return obj.booking.pk if obj.booking else None
