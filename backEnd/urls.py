@@ -33,13 +33,12 @@ api_urlpatterns = [
     # nearby
     path("nearby-all/", views.nearby_all),
 
-    # ───── Notifications (FIXED) ─────
+    # ───── Notifications ─────
     path("notifications/", views.notification_list),
     path("notifications/read-all/", views.notification_mark_all_read),
     path("notifications/<int:pk>/read/", views.notification_mark_read),
     path("notifications/<int:pk>/", views.notification_delete),
 
-    # DRF auth
     path("api-auth/", include("rest_framework.urls")),
 ]
 
