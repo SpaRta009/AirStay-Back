@@ -689,6 +689,29 @@ def booking_update_status(request, pk):
     if not new_status or new_status not in allowed:
         return Response({'error': f'Status must be one of {allowed}'}, status=400)
 
+    # ── Block confirmation if dates overlap with another confirmed/paid booking ──
+    if new_status == 'confirmed':
+        overlap = Booking.objects.filter(
+            property=booking.property,
+            status__in=['confirmed', 'paid'],
+            check_in__lt=booking.check_out,
+            check_out__gt=booking.check_in,
+        ).exclude(pk=pk)
+        if overlap.exists():
+            conflicting = overlap.first()
+            return Response({
+                'error': 'conflict',
+                'message': (
+                    f'This property is already confirmed for '
+                    f'{conflicting.check_in} → {conflicting.check_out}. '
+                    f'You cannot confirm overlapping bookings. '
+                    f'Please cancel one of them first.'
+                ),
+                'conflicting_booking_id': conflicting.pk,
+                'conflicting_check_in': str(conflicting.check_in),
+                'conflicting_check_out': str(conflicting.check_out),
+            }, status=409)
+
     # Direct DB update — avoids triggering Booking.save() / signal
     Booking.objects.filter(pk=pk).update(status=new_status)
     booking.refresh_from_db()
