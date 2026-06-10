@@ -95,11 +95,11 @@ class PropertySerializer(GeoFeatureModelSerializer):
         read_only=True
     )
 
-    def get_image(self, obj):
-        # Try the main cover image first
-        image_field = obj.image
+    # Dans serializers.py
 
-        # Fallback: if no cover image, use the first PropertyImage
+    def get_image(self, obj):
+        # Pour PropertySerializer (adapter légèrement pour PropertyImageSerializer)
+        image_field = obj.image
         if not image_field:
             first = obj.images.first()
             if first and first.image:
@@ -108,6 +108,10 @@ class PropertySerializer(GeoFeatureModelSerializer):
                 return None
 
         url = image_field.url
+
+        # ✅ CORRECTION : Ajouter .jpg si l'URL Cloudinary n'a pas d'extension
+        if "res.cloudinary.com" in url and "." not in url.split("/")[-1]:
+            url = f"{url}.jpg"
 
         if url.startswith("http"):
             return url
