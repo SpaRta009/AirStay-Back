@@ -96,10 +96,18 @@ class PropertySerializer(GeoFeatureModelSerializer):
     )
 
     def get_image(self, obj):
-        if not obj.image:
-            return None
+        # Try the main cover image first
+        image_field = obj.image
 
-        url = obj.image.url
+        # Fallback: if no cover image, use the first PropertyImage
+        if not image_field:
+            first = obj.images.first()
+            if first and first.image:
+                image_field = first.image
+            else:
+                return None
+
+        url = image_field.url
 
         if url.startswith("http"):
             return url
