@@ -283,30 +283,40 @@ def nearby_all(request):
 # Property Images
 # ─────────────────────────────────────────
 @api_view(['POST'])
-@permission_classes([IsAuthenticatedOrReadOnly])
+@permission_classes([IsAuthenticated])
 def property_images_upload(request, pk):
     prop = get_object_or_404(Property, pk=pk, active=True)
 
     if request.user != prop.owner:
         return Response({'error': 'You do not have permission to upload images for this property.'}, status=403)
 
-    if not request.FILES:
+    images = request.FILES.getlist('image')
+    if not images:
         return Response({'error': 'No images provided.'}, status=400)
 
-    images = request.FILES.getlist('image')
     created_images = []
 
     for image_file in images:
         if not image_file.content_type.startswith('image/'):
             continue
-        img = PropertyImage.objects.create(property=prop, image=image_file)
-        created_images.append(PropertyImageSerializer(img, context={'request': request}).data)
+        try:
+            img = PropertyImage.objects.create(property=prop, image=image_file)
+            created_images.append(PropertyImageSerializer(img, context={'request': request}).data)
+        except Exception as e:
+            logger.error(f"[ImageUpload] Failed to save image '{image_file.name}': {e}", exc_info=True)
+            return Response(
+                {'error': f'Failed to save image "{image_file.name}": {str(e)}'},
+                status=500,
+            )
+
+    if not created_images:
+        return Response({'error': 'No valid image files were provided.'}, status=400)
 
     return Response({'images': created_images}, status=201)
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticatedOrReadOnly])
+@permission_classes([IsAuthenticated])
 def property_image_delete(request, pk, img_pk):
     prop = get_object_or_404(Property, pk=pk, active=True)
 
@@ -320,7 +330,7 @@ def property_image_delete(request, pk, img_pk):
 
 
 @api_view(['PATCH'])
-@permission_classes([IsAuthenticatedOrReadOnly])
+@permission_classes([IsAuthenticated])
 def property_set_cover(request, pk, img_pk):
     prop = get_object_or_404(Property, pk=pk, active=True)
 
