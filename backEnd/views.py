@@ -356,6 +356,35 @@ def property_clear_cover(request, pk):
     return Response({'status': 'cover cleared'}, status=200)
 
 
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def property_set_cover(request, pk, img_pk):
+    prop = get_object_or_404(Property, pk=pk, active=True)
+
+    if request.user != prop.owner:
+        return Response({'error': 'You do not have permission to edit this property.'}, status=403)
+
+    img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
+
+    # If there is an existing cover that is not already in the gallery,
+    # demote it by saving it as a new PropertyImage so it is not lost.
+    if prop.image:
+        cover_name = prop.image.name
+        already_in_gallery = prop.images.filter(image=cover_name).exists()
+        if not already_in_gallery:
+            PropertyImage.objects.create(property=prop, image=cover_name)
+
+    # Promote the chosen gallery image to cover.
+    prop.image = img.image
+    prop.save(update_fields=['image'])
+
+    # Remove the gallery row — it is now the cover, no need for a duplicate.
+    img.delete()
+
+    serializer = PropertySerializer(prop, context={'request': request})
+    return Response(serializer.data, status=200)
+
+
 
     prop = get_object_or_404(Property, pk=pk, active=True)
 
