@@ -366,19 +366,24 @@ def property_set_cover(request, pk, img_pk):
 
     img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
 
-    # If there is an existing cover that is not already in the gallery,
-    # demote it by saving it as a new PropertyImage so it is not lost.
+    # Si un cover existait déjà et n'est pas dans la galerie, on le rétrograde dans la galerie
     if prop.image:
         cover_name = prop.image.name
         already_in_gallery = prop.images.filter(image=cover_name).exists()
         if not already_in_gallery:
             PropertyImage.objects.create(property=prop, image=cover_name)
 
-    # Promote the chosen gallery image to cover.
-    prop.image = img.image
+    # 1. On promeut l'image de la galerie comme nouveau cover
+    prop.image = img.image.name  # On copie juste le nom/chemin du fichier
     prop.save(update_fields=['image'])
 
-    # Remove the gallery row — it is now the cover, no need for a duplicate.
+    # 🚨 LA CORRECTION EST ICI 🚨
+    # On détache le fichier physique de l'objet PropertyImage AVANT de le supprimer.
+    # Ainsi, quand on supprime l'objet, Cloudinary ne supprime pas le vrai fichier.
+    img.image = None
+    img.save(update_fields=['image'])
+
+    # 2. On supprime la ligne de la galerie (sans détruire le fichier sur Cloudinary)
     img.delete()
 
     serializer = PropertySerializer(prop, context={'request': request})
