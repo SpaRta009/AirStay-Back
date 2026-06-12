@@ -92,11 +92,17 @@ class PropertyImageSerializer(serializers.ModelSerializer):
         model = PropertyImage
         fields = ('id', 'image')
 
+# Dans ton fichier serializers.py
+# Cherche la méthode get_image dans PropertySerializer et remplace-la par ceci :
+
     def get_image(self, obj):
-        if not obj.image:
+        image_field = obj.image
+        
+        # 🚨 SUPPRESSION DU FALLBACK QUI CRÉAIT LES COVERS FANTÔMES 🚨
+        if not image_field:
             return None
 
-        url = fix_cloudinary_url(obj.image.url)
+        url = fix_cloudinary_url(image_field.url)
 
         if url.startswith("http"):
             return url
