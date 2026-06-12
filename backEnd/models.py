@@ -30,6 +30,9 @@ class User(AbstractUser):
         choices=[('guest', 'Guest'), ('host', 'Host')],
         default='guest'
     )
+    # Superhost status is set manually by admins (e.g. via Django admin).
+    # It is NEVER derived from listing order or any client-visible heuristic.
+    is_superhost = models.BooleanField(default=False)
 
     class Meta:
         verbose_name_plural = 'Users'

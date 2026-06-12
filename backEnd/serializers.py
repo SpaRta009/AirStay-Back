@@ -42,6 +42,7 @@ class UserSerializer(serializers.ModelSerializer):
             'last_name',
             'phone_number',
             'role',
+            'is_superhost',   # needed by the property card — never expose via index tricks
         )
         read_only_fields = fields
 
