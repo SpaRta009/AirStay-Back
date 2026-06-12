@@ -30,27 +30,17 @@ def fix_cloudinary_url(url: str) -> str:
     if "res.cloudinary.com" not in url:
         return url
 
-    # 1. Strip the bogus version token  /v<digits>/  inserted by django-cloudinary-storage.
-    #    e.g.  .../upload/v1/media/...  →  .../upload/media/...
+    # 1. Enlever le faux token de version (/v1/, /v1234/)
     url = re.sub(r"/upload/v\d+/", "/upload/", url)
 
-    # 2. Cloudinary strips file extensions from public IDs at upload time.
-    #    upload_property_image_path generates names like "property_images/foo_abc123.jpg",
-    #    but Cloudinary stores the public_id as "media/property_images/foo_abc123" (no ext).
-    #    The URL therefore ends with "foo_abc123.jpg" which Cloudinary cannot resolve → 404.
-    #    Fix: remove the extension from the last path segment so Cloudinary serves the file
-    #    using its own format negotiation (it defaults to the original format).
+    # 2. Forcer l'extension .jpg si elle est absente (Fix l'erreur 404 Not Found)
     path_part, _, query = url.partition("?")
-    last_segment = path_part.split("/")[-1]
-    known_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".tiff")
-    for ext in known_exts:
-        if last_segment.lower().endswith(ext):
-            # Strip the extension from the URL
-            path_part = path_part[: -len(ext)]
-            url = f"{path_part}?{query}" if query else path_part
-            break
+    has_ext = any(path_part.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"])
+    
+    if not has_ext:
+        path_part += ".jpg"
 
-    return url
+    return f"{path_part}?{query}" if query else path_part
 
 
 # ─────────────────────────────
@@ -82,7 +72,7 @@ class CitySimpleSerializer(serializers.ModelSerializer):
         fields = ('pk', 'name')
 
 
-# ─────────────────────────────
+# # ─────────────────────────────
 # PropertyImage
 # ─────────────────────────────
 class PropertyImageSerializer(serializers.ModelSerializer):
@@ -92,25 +82,15 @@ class PropertyImageSerializer(serializers.ModelSerializer):
         model = PropertyImage
         fields = ('id', 'image')
 
-# Dans ton fichier serializers.py
-# Cherche la méthode get_image dans PropertySerializer et remplace-la par ceci :
-
     def get_image(self, obj):
-        image_field = obj.image
-        
-        # 🚨 SUPPRESSION DU FALLBACK QUI CRÉAIT LES COVERS FANTÔMES 🚨
-        if not image_field:
+        if not obj.image:
             return None
-
-        url = fix_cloudinary_url(image_field.url)
-
+        url = fix_cloudinary_url(obj.image.url)
         if url.startswith("http"):
             return url
-
         request = self.context.get("request")
         if request:
             return request.build_absolute_uri(url)
-
         return url
 
 
@@ -143,26 +123,15 @@ class PropertySerializer(GeoFeatureModelSerializer):
     )
 
     owner = UserSerializer(read_only=True)
-
     image = serializers.SerializerMethodField()
-
-    images = PropertyImageSerializer(
-        many=True,
-        read_only=True
-    )
-
-    # Dans serializers.py
+    images = PropertyImageSerializer(many=True, read_only=True)
 
     def get_image(self, obj):
-        image_field = obj.image
-        if not image_field:
-            first = obj.images.first()
-            if first and first.image:
-                image_field = first.image
-            else:
-                return None
+        # 🚨 FIX ULTIME : Si pas de cover, on renvoie null. Plus de fallback !
+        if not obj.image:
+            return None
 
-        url = fix_cloudinary_url(image_field.url)
+        url = fix_cloudinary_url(obj.image.url)
 
         if url.startswith("http"):
             return url
@@ -192,7 +161,6 @@ class PropertySerializer(GeoFeatureModelSerializer):
             'city',
             'city_id',
         )
-
 
 # ─────────────────────────────
 # City GeoJSON
