@@ -344,9 +344,19 @@ def property_image_delete(request, pk, img_pk):
     img.delete()
     return Response(status=204)
 
-@api_view(['PATCH'])
+@api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def property_set_cover(request, pk, img_pk):
+def property_clear_cover(request, pk):
+    """Clears Property.image without deleting any gallery image."""
+    prop = get_object_or_404(Property, pk=pk, active=True)
+    if request.user != prop.owner:
+        return Response({'error': 'Forbidden.'}, status=403)
+    prop.image = None
+    prop.save(update_fields=['image'])
+    return Response({'status': 'cover cleared'}, status=200)
+
+
+
     prop = get_object_or_404(Property, pk=pk, active=True)
 
     if request.user != prop.owner:

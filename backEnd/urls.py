@@ -17,6 +17,7 @@ api_urlpatterns = [
     path("properties/<int:pk>/images/", views.property_images_upload, name="property-images-upload"),
     path("properties/<int:pk>/images/<int:img_pk>/delete/", views.property_image_delete, name="property-image-delete"),
     path("properties/<int:pk>/images/<int:img_pk>/set-cover/", views.property_set_cover, name="property-set-cover"),
+    path("properties/<int:pk>/clear-cover/",                   views.property_clear_cover, name="property-clear-cover"),
     # Add to api_urlpatterns (inside format_suffix_patterns):
     path("properties/<int:pk>/bookings/",    views.property_bookings,         name="property-bookings"),
     path("bookings/<int:pk>/status/",        views.booking_update_status,     name="booking-update-status"),
