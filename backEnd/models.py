@@ -9,20 +9,16 @@ from django.utils.text import slugify  # ✅ Importé pour nettoyer les noms de 
 
 # ✅ Nouvelle fonction pour nettoyer et sécuriser le nom des images
 def upload_property_image_path(instance, filename):
-    # Sépare le nom du fichier et son extension (ex: 'téléchargement', '.jpg')
     name, ext = os.path.splitext(filename)
-    
-    # slugify transforme "téléchargement" en "telechargement" (retire accents, espaces, majuscules)
     safe_name = slugify(name)
-    
-    # Sécurité si le nom ne contenait que des caractères spéciaux
     if not safe_name:
         safe_name = "property_photo"
-        
-    # Génère un mini identifiant unique de 8 caractères pour éviter les collisions de fichiers
+
+    # Truncate to 40 chars so the full path stays well under the DB column limit:
+    # "property_images/" (16) + name (40) + "_" + uuid (8) + ext (5) = ~70 chars max
+    safe_name = safe_name[:40]
+
     unique_id = uuid.uuid4().hex[:8]
-    
-    # Renvoie le chemin propre : property_images/telechargement_a1b2c3d4.jpg
     return f"property_images/{safe_name}_{unique_id}{ext}"
 
 
@@ -65,7 +61,7 @@ class Property(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     modified_at = models.DateTimeField(auto_now=True)
     # ✅ Modifié pour utiliser la fonction de nettoyage automatique
-    image = models.ImageField(upload_to=upload_property_image_path, blank=True, null=True)
+    image = models.ImageField(upload_to=upload_property_image_path, blank=True, null=True, max_length=200)
     active = models.BooleanField(default=True)
     point_geom = gis_models.PointField()
 
@@ -138,7 +134,7 @@ class Booking(models.Model):
 class PropertyImage(models.Model):
     property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='images')
     # ✅ Modifié pour utiliser la fonction de nettoyage automatique
-    image = models.ImageField(upload_to=upload_property_image_path)
+    image = models.ImageField(upload_to=upload_property_image_path, max_length=200)
 
     class Meta:
         verbose_name_plural = 'Property Images'
