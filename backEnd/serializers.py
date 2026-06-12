@@ -6,29 +6,22 @@ from rest_framework_gis.serializers import GeoFeatureModelSerializer
 # ─────────────────────────────────────────────────────────────────────────────
 # Cloudinary URL normaliser
 #
-# Django's MEDIA_URL (e.g. "/media/") gets prepended to the stored path before
-# django-cloudinary-storage builds the final URL.  The result looks like:
+# Files are stored in Cloudinary with public IDs like:
+#   media/property_images/foo_abc123
 #
-#   https://res.cloudinary.com/<cloud>/image/upload/v1/media/property_images/foo_abc123.jpg
+# django-cloudinary-storage builds the URL as:
+#   https://res.cloudinary.com/<cloud>/image/upload/v1/media/property_images/foo_abc123
 #
-# The correct Cloudinary URL omits that "/media/" segment:
-#
-#   https://res.cloudinary.com/<cloud>/image/upload/v1/property_images/foo_abc123.jpg
-#
-# Additionally some images were stored without a file extension; Cloudinary
-# serves them fine when ".jpg" is appended.
+# That URL is correct. The only issue is that Cloudinary sometimes omits the
+# file extension from the public ID, so the URL ends without ".jpg".
+# Cloudinary returns a 404 for extension-less URLs; appending ".jpg" fixes it.
 # ─────────────────────────────────────────────────────────────────────────────
 def fix_cloudinary_url(url: str) -> str:
     if not url:
         return url
 
-    # 1. Strip the spurious /media/ path segment
-    #    Handles both /media/ and /media (no trailing slash before next segment)
-    import re
-    url = re.sub(r'(res\.cloudinary\.com/[^/]+/image/upload/[^/]+)/media/', r'\1/', url)
-
-    # 2. Append .jpg when the last path segment has no extension
-    last_segment = url.split("/")[-1].split("?")[0]  # ignore query strings
+    # Append .jpg when the last path segment has no file extension
+    last_segment = url.split("/")[-1].split("?")[0]  # strip query string
     if "res.cloudinary.com" in url and "." not in last_segment:
         url = f"{url}.jpg"
 
