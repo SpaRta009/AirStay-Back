@@ -6,23 +6,37 @@ from rest_framework_gis.serializers import GeoFeatureModelSerializer
 # ─────────────────────────────────────────────────────────────────────────────
 # Cloudinary URL normaliser
 #
-# Files are stored in Cloudinary with public IDs like:
+# django-cloudinary-storage stores files with public IDs like:
 #   media/property_images/foo_abc123
 #
-# django-cloudinary-storage builds the URL as:
+# It then builds the URL as:
 #   https://res.cloudinary.com/<cloud>/image/upload/v1/media/property_images/foo_abc123
 #
-# That URL is correct. The only issue is that Cloudinary sometimes omits the
-# file extension from the public ID, so the URL ends without ".jpg".
-# Cloudinary returns a 404 for extension-less URLs; appending ".jpg" fixes it.
+# The "v1/" token is a fake cache-buster injected by the library. Cloudinary
+# only accepts a versioned URL if the file was actually assigned that version
+# at upload time (which django-cloudinary-storage never does). So the "v1/"
+# causes a 404 for every file.
+#
+# Fix: strip "/v1/" (and any "/vNNN/" version token) from the upload path.
+# Also append ".jpg" when the public ID has no file extension, because
+# Cloudinary returns a 404 for extension-less public IDs too.
 # ─────────────────────────────────────────────────────────────────────────────
+import re
+
 def fix_cloudinary_url(url: str) -> str:
     if not url:
         return url
 
-    # Append .jpg when the last path segment has no file extension
-    last_segment = url.split("/")[-1].split("?")[0]  # strip query string
-    if "res.cloudinary.com" in url and "." not in last_segment:
+    if "res.cloudinary.com" not in url:
+        return url
+
+    # 1. Strip the bogus version token  /v<digits>/  inserted by django-cloudinary-storage.
+    #    e.g.  .../upload/v1/media/...  →  .../upload/media/...
+    url = re.sub(r"/upload/v\d+/", "/upload/", url)
+
+    # 2. Append .jpg when the last path segment has no file extension.
+    last_segment = url.split("/")[-1].split("?")[0]
+    if "." not in last_segment:
         url = f"{url}.jpg"
 
     return url
@@ -42,7 +56,6 @@ class UserSerializer(serializers.ModelSerializer):
             'last_name',
             'phone_number',
             'role',
-            'is_superhost',   # needed by the property card — never expose via index tricks
         )
         read_only_fields = fields
 
