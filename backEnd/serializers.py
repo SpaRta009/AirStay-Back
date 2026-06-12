@@ -3,6 +3,38 @@ from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Cloudinary URL normaliser
+#
+# Django's MEDIA_URL (e.g. "/media/") gets prepended to the stored path before
+# django-cloudinary-storage builds the final URL.  The result looks like:
+#
+#   https://res.cloudinary.com/<cloud>/image/upload/v1/media/property_images/foo_abc123.jpg
+#
+# The correct Cloudinary URL omits that "/media/" segment:
+#
+#   https://res.cloudinary.com/<cloud>/image/upload/v1/property_images/foo_abc123.jpg
+#
+# Additionally some images were stored without a file extension; Cloudinary
+# serves them fine when ".jpg" is appended.
+# ─────────────────────────────────────────────────────────────────────────────
+def fix_cloudinary_url(url: str) -> str:
+    if not url:
+        return url
+
+    # 1. Strip the spurious /media/ path segment
+    #    Handles both /media/ and /media (no trailing slash before next segment)
+    import re
+    url = re.sub(r'(res\.cloudinary\.com/[^/]+/image/upload/[^/]+)/media/', r'\1/', url)
+
+    # 2. Append .jpg when the last path segment has no extension
+    last_segment = url.split("/")[-1].split("?")[0]  # ignore query strings
+    if "res.cloudinary.com" in url and "." not in last_segment:
+        url = f"{url}.jpg"
+
+    return url
+
+
 # ─────────────────────────────
 # User
 # ─────────────────────────────
@@ -46,7 +78,7 @@ class PropertyImageSerializer(serializers.ModelSerializer):
         if not obj.image:
             return None
 
-        url = obj.image.url
+        url = fix_cloudinary_url(obj.image.url)
 
         if url.startswith("http"):
             return url
@@ -98,7 +130,6 @@ class PropertySerializer(GeoFeatureModelSerializer):
     # Dans serializers.py
 
     def get_image(self, obj):
-        # Pour PropertySerializer (adapter légèrement pour PropertyImageSerializer)
         image_field = obj.image
         if not image_field:
             first = obj.images.first()
@@ -107,11 +138,7 @@ class PropertySerializer(GeoFeatureModelSerializer):
             else:
                 return None
 
-        url = image_field.url
-
-        # ✅ CORRECTION : Ajouter .jpg si l'URL Cloudinary n'a pas d'extension
-        if "res.cloudinary.com" in url and "." not in url.split("/")[-1]:
-            url = f"{url}.jpg"
+        url = fix_cloudinary_url(image_field.url)
 
         if url.startswith("http"):
             return url
