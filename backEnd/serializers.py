@@ -34,10 +34,21 @@ def fix_cloudinary_url(url: str) -> str:
     #    e.g.  .../upload/v1/media/...  →  .../upload/media/...
     url = re.sub(r"/upload/v\d+/", "/upload/", url)
 
-    # 2. Append .jpg when the last path segment has no file extension.
-    last_segment = url.split("/")[-1].split("?")[0]
-    if "." not in last_segment:
-        url = f"{url}.jpg"
+    # 2. Cloudinary strips file extensions from public IDs at upload time.
+    #    upload_property_image_path generates names like "property_images/foo_abc123.jpg",
+    #    but Cloudinary stores the public_id as "media/property_images/foo_abc123" (no ext).
+    #    The URL therefore ends with "foo_abc123.jpg" which Cloudinary cannot resolve → 404.
+    #    Fix: remove the extension from the last path segment so Cloudinary serves the file
+    #    using its own format negotiation (it defaults to the original format).
+    path_part, _, query = url.partition("?")
+    last_segment = path_part.split("/")[-1]
+    known_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".tiff")
+    for ext in known_exts:
+        if last_segment.lower().endswith(ext):
+            # Strip the extension from the URL
+            path_part = path_part[: -len(ext)]
+            url = f"{path_part}?{query}" if query else path_part
+            break
 
     return url
 
