@@ -324,10 +324,25 @@ def property_image_delete(request, pk, img_pk):
         return Response({'error': 'You do not have permission to delete images for this property.'}, status=403)
 
     img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
-    img.image.delete(save=False)
+
+    deleted_name = img.image.name  # Cloudinary public ID / path
+
+    # If this gallery image IS the current cover, clear the cover field first
+    # so the property doesn't keep pointing at a file we're about to remove.
+    if prop.image and prop.image.name == deleted_name:
+        prop.image = None
+        prop.save(update_fields=['image'])
+
+    # Delete the Cloudinary file. django-cloudinary-storage respects this only
+    # when CLOUDINARY_STORAGE['DELETE_UNUSED_FILES'] is True.
+    # We call it anyway; worst case the file stays on Cloudinary but the DB is clean.
+    try:
+        img.image.delete(save=False)
+    except Exception as e:
+        logger.warning(f"[ImageDelete] Cloudinary file deletion failed for {deleted_name}: {e}")
+
     img.delete()
     return Response(status=204)
-
 
 @api_view(['PATCH'])
 @permission_classes([IsAuthenticated])
@@ -339,19 +354,23 @@ def property_set_cover(request, pk, img_pk):
 
     img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
 
-    old_cover = prop.image
-    new_cover = img.image
+    # If there is an existing cover that is not already in the gallery,
+    # demote it by saving it as a new PropertyImage so it is not lost.
+    if prop.image:
+        cover_name = prop.image.name
+        already_in_gallery = prop.images.filter(image=cover_name).exists()
+        if not already_in_gallery:
+            PropertyImage.objects.create(property=prop, image=cover_name)
 
-    prop.image = new_cover
+    # Promote the chosen gallery image to cover.
+    prop.image = img.image
     prop.save(update_fields=['image'])
 
-    if old_cover:
-        img.image = old_cover
-        img.save(update_fields=['image'])
-    else:
-        img.delete()
+    # Remove the gallery row — it is now the cover, no need for a duplicate.
+    img.delete()
 
-    return Response({'message': 'Cover updated.'}, status=200)
+    serializer = PropertySerializer(prop, context={'request': request})
+    return Response(serializer.data, status=200)
 
 
 # ─────────────────────────────────────────
