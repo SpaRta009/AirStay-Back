@@ -354,13 +354,28 @@ def property_image_delete(request, pk, img_pk):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def property_clear_cover(request, pk):
-    """Clears Property.image without deleting any gallery image."""
+    """
+    Clears Property.image. If the property has gallery images, automatically
+    promotes the first one to cover so the map and listings always show a photo.
+    Returns the full updated property so the frontend can refresh in one call.
+    """
     prop = get_object_or_404(Property, pk=pk, active=True)
     if request.user != prop.owner:
         return Response({'error': 'Forbidden.'}, status=403)
+
     prop.image = None
     prop.save(update_fields=['image'])
-    return Response({'status': 'cover cleared'}, status=200)
+
+    # Auto-promote the first gallery image so callers get a valid cover immediately.
+    first_gallery = prop.images.order_by('id').first()
+    if first_gallery:
+        prop.image = first_gallery.image.name
+        prop.save(update_fields=['image'])
+        # Remove it from the gallery so it isn't shown twice.
+        PropertyImage.objects.filter(pk=first_gallery.pk).delete()
+
+    serializer = PropertySerializer(prop, context={'request': request})
+    return Response(serializer.data, status=200)
 
 
 @api_view(['PATCH'])
