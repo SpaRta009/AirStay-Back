@@ -170,6 +170,13 @@ class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
                 {'error': 'You do not have permission to edit this property.'},
                 status=403
             )
+
+        # ✅ GESTION MANUELLE DU NOUVEAU COVER (Comme HostProperty)
+        new_image = request.FILES.get('image')
+        if new_image:
+            prop.image = new_image
+            prop.save(update_fields=['image'])
+
         return super().update(request, *args, **kwargs)
 
 
@@ -366,25 +373,22 @@ def property_set_cover(request, pk, img_pk):
 
     img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
 
-    # Si un cover existait déjà et n'est pas dans la galerie, on le rétrograde dans la galerie
+    # Si un cover existait déjà et n'est pas dans la galerie, on le rétrograde
     if prop.image:
         cover_name = prop.image.name
         already_in_gallery = prop.images.filter(image=cover_name).exists()
         if not already_in_gallery:
             PropertyImage.objects.create(property=prop, image=cover_name)
 
-    # 1. On promeut l'image de la galerie comme nouveau cover
-    prop.image = img.image.name  # On copie juste le nom/chemin du fichier
+    # 1. On promeut l'image
+    prop.image = img.image.name
     prop.save(update_fields=['image'])
 
-    # 🚨 LA CORRECTION EST ICI 🚨
-    # On détache le fichier physique de l'objet PropertyImage AVANT de le supprimer.
-    # Ainsi, quand on supprime l'objet, Cloudinary ne supprime pas le vrai fichier.
-    img.image = None
-    img.save(update_fields=['image'])
-
-    # 2. On supprime la ligne de la galerie (sans détruire le fichier sur Cloudinary)
-    img.delete()
+    # 🚨 LA CORRECTION ULTIME EST LÀ 🚨
+    # Utiliser un BULK DELETE au lieu de img.delete() ou img.image = None.
+    # Le bulk delete de Django (QuerySet) supprime la ligne dans la base de données
+    # SANS déclencher les "signals" de Cloudinary qui effaçaient le fichier physique !
+    PropertyImage.objects.filter(pk=img_pk).delete()
 
     serializer = PropertySerializer(prop, context={'request': request})
     return Response(serializer.data, status=200)
