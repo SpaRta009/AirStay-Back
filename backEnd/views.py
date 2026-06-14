@@ -369,9 +369,13 @@ def property_clear_cover(request, pk):
     # Auto-promote the first gallery image so callers get a valid cover immediately.
     first_gallery = prop.images.order_by('id').first()
     if first_gallery:
+        # Assign the Cloudinary public ID string directly — same as property_set_cover.
+        # Do NOT do: prop.image = first_gallery.image  (copies the File descriptor,
+        # which can cause django-cloudinary-storage to re-upload or lose the reference)
         prop.image = first_gallery.image.name
         prop.save(update_fields=['image'])
-        # Remove it from the gallery so it isn't shown twice.
+        # Bulk-delete: avoids triggering Cloudinary's post-delete signal on the file
+        # we just promoted to cover.
         PropertyImage.objects.filter(pk=first_gallery.pk).delete()
 
     serializer = PropertySerializer(prop, context={'request': request})
@@ -388,21 +392,24 @@ def property_set_cover(request, pk, img_pk):
 
     img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
 
-    # Si un cover existait déjà et n'est pas dans la galerie, on le rétrograde
-    if prop.image:
+    # If a cover already exists and is NOT in the gallery, demote it back into
+    # the gallery so we don't lose it.
+    if prop.image and prop.image.name:
         cover_name = prop.image.name
         already_in_gallery = prop.images.filter(image=cover_name).exists()
         if not already_in_gallery:
             PropertyImage.objects.create(property=prop, image=cover_name)
 
-    # 1. On promeut l'image
-    prop.image = img.image.name
+    # Promote the gallery image to cover.
+    # IMPORTANT: assign the .name (Cloudinary public ID string) directly to the
+    # ImageField — this is the same technique Django uses internally and preserves
+    # the exact public ID that Cloudinary already knows about.
+    new_cover_name = img.image.name
+    prop.image = new_cover_name
     prop.save(update_fields=['image'])
 
-    # 🚨 LA CORRECTION ULTIME EST LÀ 🚨
-    # Utiliser un BULK DELETE au lieu de img.delete() ou img.image = None.
-    # Le bulk delete de Django (QuerySet) supprime la ligne dans la base de données
-    # SANS déclencher les "signals" de Cloudinary qui effaçaient le fichier physique !
+    # Use a bulk QuerySet delete so Django does NOT trigger Cloudinary's
+    # post-delete signal, which would physically remove the file we just promoted.
     PropertyImage.objects.filter(pk=img_pk).delete()
 
     serializer = PropertySerializer(prop, context={'request': request})

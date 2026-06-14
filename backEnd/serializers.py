@@ -24,21 +24,45 @@ from rest_framework_gis.serializers import GeoFeatureModelSerializer
 import re
 
 def fix_cloudinary_url(url: str) -> str:
+    """
+    Fixes URLs produced by django-cloudinary-storage:
+
+    Problem 1 – Fake version token:
+      The library emits  /upload/v1/media/...  but Cloudinary only honours a
+      versioned URL when the file was actually assigned that version at upload
+      time (which the library never does).  Strip /vNNN/ unconditionally.
+
+    Problem 2 – Missing file extension:
+      Files uploaded from iOS (HEIC, etc.) or whose original name had no
+      extension end up stored in Cloudinary *without* an extension in the
+      public ID.  Cloudinary returns 404 for extension-less public IDs unless
+      you either (a) use the Cloudinary delivery URL with `f_auto` / `fl_attachment`
+      or (b) append the correct extension.
+
+      Strategy: inject Cloudinary's `f_auto` transformation so Cloudinary
+      itself picks the right format.  This is more robust than guessing .jpg
+      because the stored file might actually be a PNG, HEIC-converted JPEG, etc.
+    """
     if not url:
         return url
 
     if "res.cloudinary.com" not in url:
         return url
 
-    # 1. Enlever le faux token de version (/v1/, /v1234/)
+    # 1. Strip the fake version token  /upload/v<digits>/  →  /upload/
     url = re.sub(r"/upload/v\d+/", "/upload/", url)
 
-    # 2. Forcer l'extension .jpg si elle est absente (Fix l'erreur 404 Not Found)
+    # 2. If there is no file extension in the public-ID part, inject f_auto so
+    #    Cloudinary serves whatever format it actually stored.
     path_part, _, query = url.partition("?")
-    has_ext = any(path_part.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"])
-    
+    has_ext = bool(re.search(r'\.(jpg|jpeg|png|webp|gif|avif|heic|bmp|tiff?)$', path_part, re.IGNORECASE))
+
     if not has_ext:
-        path_part += ".jpg"
+        # Insert the f_auto transformation right after /upload/
+        # Before: https://res.cloudinary.com/cloud/image/upload/media/property_images/foo_abc
+        # After:  https://res.cloudinary.com/cloud/image/upload/f_auto/media/property_images/foo_abc
+        url = re.sub(r"(/upload/)", r"\1f_auto/", path_part)
+        return f"{url}?{query}" if query else url
 
     return f"{path_part}?{query}" if query else path_part
 
