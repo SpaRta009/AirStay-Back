@@ -171,12 +171,39 @@ class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
                 status=403
             )
 
-        # ✅ GESTION MANUELLE DU NOUVEAU COVER (Comme HostProperty)
+        # Always partial so absent fields (image, city, category) are never blanked.
+        kwargs['partial'] = True
+
         new_image = request.FILES.get('image')
         if new_image:
+            # Save the old cover name BEFORE overwriting it.
+            old_image_name = prop.image.name if prop.image else None
+
+            # Upload new cover to Cloudinary and write it to the DB.
             prop.image = new_image
             prop.save(update_fields=['image'])
 
+            # Demote the old cover into the gallery so it is never lost.
+            # This is the fix: previously the old cover was simply discarded
+            # (and eventually deleted from Cloudinary) whenever a new cover
+            # was set via the edit-property form.
+            if old_image_name:
+                already_in_gallery = prop.images.filter(image=old_image_name).exists()
+                if not already_in_gallery:
+                    PropertyImage.objects.create(property=prop, image=old_image_name)
+
+            # Update text fields only — strip 'image' from the payload so the
+            # serializer never calls prop.save() on the image field a second time.
+            # A second save would cause django-cloudinary-storage to interpret the
+            # previous file as "replaced" and physically delete it from Cloudinary.
+            mutable = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+            mutable.pop('image', None)
+            serializer = self.get_serializer(prop, data=mutable, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data)
+
+        # No new image: update text fields only, never touch Property.image.
         return super().update(request, *args, **kwargs)
 
 
