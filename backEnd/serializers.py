@@ -25,23 +25,21 @@ import re
 
 def fix_cloudinary_url(url: str) -> str:
     """
-    Fixes URLs produced by django-cloudinary-storage:
+    Fixes URLs produced by django-cloudinary-storage.
 
     Problem 1 – Fake version token:
-      The library emits  /upload/v1/media/...  but Cloudinary only honours a
-      versioned URL when the file was actually assigned that version at upload
-      time (which the library never does).  Strip /vNNN/ unconditionally.
+      django-cloudinary-storage emits /upload/v1/media/... but Cloudinary only
+      accepts a versioned URL when the file was uploaded with that exact version
+      (which the library never does). Result: 404. Fix: strip /vNNN/.
 
     Problem 2 – Missing file extension:
-      Files uploaded from iOS (HEIC, etc.) or whose original name had no
-      extension end up stored in Cloudinary *without* an extension in the
-      public ID.  Cloudinary returns 404 for extension-less public IDs unless
-      you either (a) use the Cloudinary delivery URL with `f_auto` / `fl_attachment`
-      or (b) append the correct extension.
-
-      Strategy: inject Cloudinary's `f_auto` transformation so Cloudinary
-      itself picks the right format.  This is more robust than guessing .jpg
-      because the stored file might actually be a PNG, HEIC-converted JPEG, etc.
+      When the original filename has no extension (common with iOS HEIC uploads
+      or files uploaded before the slugify fix), Cloudinary stores the public ID
+      without an extension and returns 404 for the bare URL.
+      Fix: append .jpg — all browser/mobile image uploads that reach Django are
+      served as JPEG or PNG by Cloudinary regardless of original format.
+      NOTE: f_auto does NOT fix this — f_auto only changes delivery format for
+      browsers that support WebP/AVIF; it does not resolve an extension-less 404.
     """
     if not url:
         return url
@@ -49,20 +47,20 @@ def fix_cloudinary_url(url: str) -> str:
     if "res.cloudinary.com" not in url:
         return url
 
-    # 1. Strip the fake version token  /upload/v<digits>/  →  /upload/
+    # Step 1: strip the fake version token  /upload/v<digits>/  →  /upload/
     url = re.sub(r"/upload/v\d+/", "/upload/", url)
 
-    # 2. If there is no file extension in the public-ID part, inject f_auto so
-    #    Cloudinary serves whatever format it actually stored.
+    # Step 2: if the public ID has no file extension, Cloudinary returns 404.
+    # Append .jpg — the correct extension for all image uploads from browsers.
     path_part, _, query = url.partition("?")
-    has_ext = bool(re.search(r'\.(jpg|jpeg|png|webp|gif|avif|heic|bmp|tiff?)$', path_part, re.IGNORECASE))
+    has_ext = bool(re.search(
+        r'\.(jpg|jpeg|png|webp|gif|avif|heic|bmp|tiff?)$',
+        path_part,
+        re.IGNORECASE,
+    ))
 
     if not has_ext:
-        # Insert the f_auto transformation right after /upload/
-        # Before: https://res.cloudinary.com/cloud/image/upload/media/property_images/foo_abc
-        # After:  https://res.cloudinary.com/cloud/image/upload/f_auto/media/property_images/foo_abc
-        url = re.sub(r"(/upload/)", r"\1f_auto/", path_part)
-        return f"{url}?{query}" if query else url
+        path_part += ".jpg"
 
     return f"{path_part}?{query}" if query else path_part
 
