@@ -3,6 +3,28 @@ from .serializers import (
     CategorySerializer, CitySerializer, PropertySerializer,
     BookingSerializer, PropertyImageSerializer, NotificationSerializer
 )
+# ─────────────────────────────────────────────────────────────────────────────
+# CLOUDINARY SIGNED-URL FIX — settings.py checklist
+#
+# Images expire after 1-24 hours when Cloudinary returns signed URLs.
+# To prevent this, ensure your settings.py has:
+#
+#   CLOUDINARY_STORAGE = {
+#       'CLOUD_NAME': '...',
+#       'API_KEY':    '...',
+#       'API_SECRET': '...',
+#       # CRITICAL — these two prevent signed/expiring URLs:
+#       'SECURE':     True,   # use https (fine to keep True)
+#       'SIGN_URL':   False,  # <── must be False or absent; True = expiring URLs
+#   }
+#
+# Also confirm in your Cloudinary dashboard:
+#   Settings → Security → "Strict Transformations" should be DISABLED
+#   unless you explicitly need it.
+#
+# The fix in serializers.py (fix_cloudinary_url) strips any signatures that
+# slip through, making URLs permanent regardless of SDK configuration.
+# ─────────────────────────────────────────────────────────────────────────────
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, permission_classes

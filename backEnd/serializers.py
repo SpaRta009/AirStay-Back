@@ -25,7 +25,7 @@ import re
 
 def fix_cloudinary_url(url: str) -> str:
     """
-    Fixes URLs produced by django-cloudinary-storage.
+    Fixes URLs produced by django-cloudinary-storage so they never expire.
 
     Problem 1 – Fake version token:
       django-cloudinary-storage emits /upload/v1/media/... but Cloudinary only
@@ -33,13 +33,31 @@ def fix_cloudinary_url(url: str) -> str:
       (which the library never does). Result: 404. Fix: strip /vNNN/.
 
     Problem 2 – Missing file extension:
-      When the original filename has no extension (common with iOS HEIC uploads
-      or files uploaded before the slugify fix), Cloudinary stores the public ID
-      without an extension and returns 404 for the bare URL.
-      Fix: append .jpg — all browser/mobile image uploads that reach Django are
-      served as JPEG or PNG by Cloudinary regardless of original format.
-      NOTE: f_auto does NOT fix this — f_auto only changes delivery format for
-      browsers that support WebP/AVIF; it does not resolve an extension-less 404.
+      When the original filename has no extension Cloudinary returns 404 for the
+      bare URL. Fix: append .jpg.
+
+    Problem 3 – Signed / expiring URLs (THE MAIN BUG):
+      When Cloudinary is configured with CLOUDINARY_STORAGE = {'SECURE': True}
+      or when sign_url=True is used anywhere, django-cloudinary-storage appends
+      an auth signature + timestamp to every URL:
+        ?_a=<signature>&timestamp=<unix_ts>
+      or via the newer SDK:
+        /s--<signature>--/
+      These tokens expire after ~1 hour (free plan) or up to 24 hours depending
+      on the account type. After expiry every image returns 404 — even though the
+      file still exists on Cloudinary.
+
+      Fix: strip ALL query parameters AND any inline signature segment (/s--...--/)
+      from the URL to produce a permanent unsigned delivery URL. Unsigned URLs work
+      as long as the resource is not restricted to "authenticated" access in the
+      Cloudinary dashboard (the default for any file uploaded without special
+      access_control is "public").
+
+    Problem 4 – Authenticated delivery mode:
+      If your Cloudinary account has "Strict Transformations" enabled or files were
+      uploaded with access_type='authenticated', unsigned URLs will still 404.
+      In that case set ACCESS_MODE = 'public' in your CLOUDINARY_STORAGE settings
+      and re-upload files, or disable "Strict Transformations" in the dashboard.
     """
     if not url:
         return url
@@ -50,19 +68,31 @@ def fix_cloudinary_url(url: str) -> str:
     # Step 1: strip the fake version token  /upload/v<digits>/  →  /upload/
     url = re.sub(r"/upload/v\d+/", "/upload/", url)
 
-    # Step 2: if the public ID has no file extension, Cloudinary returns 404.
-    # Append .jpg — the correct extension for all image uploads from browsers.
-    path_part, _, query = url.partition("?")
+    # Step 2: strip inline signature segments like /s--AbCdEfGh--/
+    # These are inserted by the Cloudinary SDK for signed transformations.
+    url = re.sub(r"/s--[A-Za-z0-9_-]+--/", "/", url)
+
+    # Step 3: strip ALL query-string parameters.
+    # Signed URLs append ?_a=...&timestamp=... which expire after 1–24 hours.
+    # Removing them yields a permanent unsigned delivery URL.
+    path_part = url.split("?")[0]
+
+    # Step 4: if the public ID has no file extension, Cloudinary returns 404.
+    # Append .jpg — the correct extension for browser image uploads.
     has_ext = bool(re.search(
         r'\.(jpg|jpeg|png|webp|gif|avif|heic|bmp|tiff?)$',
         path_part,
         re.IGNORECASE,
     ))
-
     if not has_ext:
         path_part += ".jpg"
 
-    return f"{path_part}?{query}" if query else path_part
+    # Step 5: inject f_auto,q_auto so Cloudinary auto-selects format + quality.
+    # Only inject once, and only if no transformation is already present.
+    if "/upload/" in path_part and "/upload/f_auto" not in path_part:
+        path_part = path_part.replace("/upload/", "/upload/f_auto,q_auto/", 1)
+
+    return path_part
 
 
 # ─────────────────────────────
