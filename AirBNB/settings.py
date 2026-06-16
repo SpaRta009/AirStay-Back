@@ -44,7 +44,7 @@ INSTALLED_APPS = [
     'django.contrib.gis',
     "corsheaders",
     "rest_framework.authtoken",
-    'django_cleanup.apps.CleanupConfig',
+    #'django_cleanup.apps.CleanupConfig',
     'rest_framework',
     'rest_framework_gis',
     # ✅ Cloudinary
@@ -151,6 +151,9 @@ CLOUDINARY_STORAGE = {
     'CLOUD_NAME': os.environ.get('CLOUDINARY_CLOUD_NAME', ''),
     'API_KEY':    os.environ.get('CLOUDINARY_API_KEY', ''),
     'API_SECRET': os.environ.get('CLOUDINARY_API_SECRET', ''),
+    # CRITICAL FIXES FOR 404 ERRORS:
+    'SECURE': True,      # Forces HTTPS connections
+    'SIGN_URL': False,   # Prevents Cloudinary from appending the 24-hour expiration token
 }
 
 # Si Cloudinary est configuré → utiliser Cloudinary pour les médias
