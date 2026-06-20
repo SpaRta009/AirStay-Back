@@ -20,6 +20,7 @@ api_urlpatterns = [
     path("properties/<int:pk>/images/<int:img_pk>/set-cover/", views.property_set_cover, name="property-set-cover"),
     path("properties/<int:pk>/clear-cover/", views.property_clear_cover, name="property-clear-cover"),
     path("properties/<int:pk>/reviews/", views.ReviewListCreateView.as_view(), name="property-reviews"),
+    path("properties/<int:pk>/reviews/<int:review_pk>/", views.ReviewDetailView.as_view(), name="property-review-detail"),
     # Add to api_urlpatterns (inside format_suffix_patterns):
     path("properties/<int:pk>/bookings/",    views.property_bookings,         name="property-bookings"),
     path("bookings/<int:pk>/status/",        views.booking_update_status,     name="booking-update-status"),

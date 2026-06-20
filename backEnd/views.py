@@ -28,6 +28,7 @@ from .serializers import (
 # ─────────────────────────────────────────────────────────────────────────────
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny, IsAuthenticated
+from rest_framework import permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
@@ -975,3 +976,28 @@ class ReviewListCreateView(generics.ListCreateAPIView):
             raise serializers.ValidationError("Vous avez déjà soumis un avis pour ce logement.")
             
         serializer.save(user=self.request.user, property=property_obj)
+
+
+class IsReviewOwner(permissions.BasePermission):
+    """Only the author of the review can edit or delete it. Everyone can read."""
+    def has_object_permission(self, request, view, obj):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return obj.user_id == request.user.id
+
+
+class ReviewDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET/PATCH/PUT/DELETE a single review.
+    Only the review's author may modify or delete it.
+    """
+    serializer_class = ReviewSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly, IsReviewOwner]
+
+    def get_queryset(self):
+        return Review.objects.filter(property_id=self.kwargs['pk'])
+
+    def get_object(self):
+        obj = get_object_or_404(self.get_queryset(), pk=self.kwargs['review_pk'])
+        self.check_object_permissions(self.request, obj)
+        return obj
