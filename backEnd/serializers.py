@@ -1,4 +1,4 @@
-from .models import Category, Notification, Property, City, Booking, User, PropertyImage, Amenity
+from .models import Category, Notification, Property, City, Booking, User, PropertyImage, Amenity, Review
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 
@@ -164,6 +164,15 @@ class AmenitySerializer(serializers.ModelSerializer):
         fields = ('id', 'name', 'icon', 'is_custom')
         read_only_fields = ('is_custom',)
 
+# ─────────────────────────────
+# Review
+# ─────────────────────────────
+class ReviewSerializer(serializers.ModelSerializer):
+    user_username = serializers.ReadOnlyField(source='user.username')
+
+    class Meta:
+        model = Review
+        fields = ['id', 'rating', 'comment', 'created_at', 'user_username']
 
 # ─────────────────────────────
 # Property
@@ -195,6 +204,9 @@ class PropertySerializer(GeoFeatureModelSerializer):
         write_only=True,
         required=False,
     )
+    reviews = ReviewSerializer(many=True, read_only=True)
+    average_rating = serializers.SerializerMethodField()
+    review_count = serializers.SerializerMethodField()
 
     def get_image(self, obj):
         # 🚨 FIX ULTIME : Si pas de cover, on renvoie null. Plus de fallback !
@@ -211,6 +223,14 @@ class PropertySerializer(GeoFeatureModelSerializer):
             return request.build_absolute_uri(url)
 
         return url
+    
+    def get_average_rating(self, obj):
+        from django.db.models import Avg
+        avg = obj.reviews.aggregate(Avg('rating'))['rating__avg']
+        return round(avg, 2) if avg else 0.0
+
+    def get_review_count(self, obj):
+        return obj.reviews.count()
 
     class Meta:
         model = Property
@@ -234,6 +254,7 @@ class PropertySerializer(GeoFeatureModelSerializer):
             'owner',
             'city',
             'city_id',
+            'reviews',
         )
 
 # ─────────────────────────────

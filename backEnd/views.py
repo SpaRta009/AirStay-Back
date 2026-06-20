@@ -1,8 +1,8 @@
-from .models import Property, Category, City, User, Booking, PropertyImage, Wishlist, Notification, Amenity
+from .models import Property, Category, City, User, Booking, PropertyImage, Wishlist, Notification, Amenity, Review
 from .serializers import (
     CategorySerializer, CitySerializer, PropertySerializer,
     BookingSerializer, PropertyImageSerializer, NotificationSerializer,
-    AmenitySerializer
+    AmenitySerializer, ReviewSerializer
 )
 # ─────────────────────────────────────────────────────────────────────────────
 # CLOUDINARY SIGNED-URL FIX — settings.py checklist
@@ -31,6 +31,7 @@ from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny, IsAu
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
+from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.geos import Point
@@ -958,3 +959,19 @@ def booking_update_status(request, pk):
         )
 
     return Response({'status': new_status})
+
+class ReviewListCreateView(generics.ListCreateAPIView):
+    serializer_class = ReviewSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get_queryset(self):
+        return Review.objects.filter(property_id=self.kwargs['pk'])
+
+    def perform_create(self, serializer):
+        property_obj = Property.objects.get(pk=self.kwargs['pk'])
+        
+        # Double sécurité en amont pour éviter une erreur brute de base de données
+        if Review.objects.filter(property=property_obj, user=self.request.user).exists():
+            raise serializers.ValidationError("Vous avez déjà soumis un avis pour ce logement.")
+            
+        serializer.save(user=self.request.user, property=property_obj)

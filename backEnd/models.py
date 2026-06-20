@@ -5,6 +5,7 @@ from django.contrib.gis.db import models as gis_models
 from django.contrib.auth.models import AbstractUser
 from django.forms import ValidationError
 from django.utils.text import slugify  # ✅ Importé pour nettoyer les noms de fichiers
+from django.core.validators import MinValueValidator, MaxValueValidator
 
 
 # ✅ Nouvelle fonction pour nettoyer et sécuriser le nom des images
@@ -96,6 +97,23 @@ class Amenity(models.Model):
     def __str__(self):
         return self.name
 
+class Review(models.Model):
+    property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='reviews')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reviews')
+    rating = models.PositiveIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)]
+    )
+    comment = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        # Garantit qu'un utilisateur ne peut laisser qu'un seul avis par propriété
+        unique_together = ('property', 'user')
+
+    def __str__(self):
+        return f"Avis de {self.user.username} sur {self.property.property_name} ({self.rating}/5)"
 
 class City(models.Model):
     city_name = models.CharField(max_length=50)
