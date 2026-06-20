@@ -57,8 +57,8 @@ class NotificationAdmin(admin.ModelAdmin):
 
 @admin.register(Amenity)
 class AmenityAdmin(admin.ModelAdmin):
-    list_display = ['id', 'amenity_name', 'icon_name']  # Ajuste 'amenity_name' ou 'icon_name' si tes champs s'appellent autrement
-    search_fields = ['amenity_name']
+    list_display = ['id', 'name', 'icon', 'is_custom', 'created_at']
+    search_fields = ['name']
 
 @admin.register(Review)
 class ReviewAdmin(admin.ModelAdmin):
