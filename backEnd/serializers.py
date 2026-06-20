@@ -255,6 +255,8 @@ class PropertySerializer(GeoFeatureModelSerializer):
             'city',
             'city_id',
             'reviews',
+            'average_rating',
+            'review_count',
         )
 
 # ─────────────────────────────
