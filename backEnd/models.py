@@ -61,6 +61,9 @@ class Property(models.Model):
     description = models.TextField(blank=True)
     price_per_night = models.DecimalField(max_digits=10, decimal_places=2)
     max_guests = models.PositiveIntegerField()
+    bedrooms = models.PositiveIntegerField(default=1)
+    bathrooms = models.PositiveIntegerField(default=1)
+    amenities = models.ManyToManyField('Amenity', blank=True, related_name='properties')
     created_at = models.DateTimeField(auto_now_add=True)
     modified_at = models.DateTimeField(auto_now=True)
     # ✅ Modifié pour utiliser la fonction de nettoyage automatique
@@ -73,6 +76,25 @@ class Property(models.Model):
 
     def __str__(self):
         return self.property_name
+
+
+# ✅ NOUVEAU : Amenities (Wifi, Piscine, Parking, etc.)
+# Les amenities "standard" sont créées par l'admin / via fixture.
+# Un hôte peut aussi proposer un amenity personnalisé depuis le formulaire
+# (created_by_user=True) — il reste utilisable par tout le monde ensuite,
+# ça évite la duplication si plusieurs hôtes proposent la même chose.
+class Amenity(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+    icon = models.CharField(max_length=30, blank=True, default="check")  # clé d'icône front-end
+    is_custom = models.BooleanField(default=False)  # True = ajouté par un hôte, pas dans la liste standard
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name_plural = 'Amenities'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
 
 
 class City(models.Model):

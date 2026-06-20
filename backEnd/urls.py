@@ -7,6 +7,7 @@ from rest_framework.urlpatterns import format_suffix_patterns
 api_urlpatterns = [
     path("categories/",              views.CategoryList.as_view(),   name=views.CategoryList.name),
     path("categories/<int:pk>/",     views.CategoryDetail.as_view(), name=views.CategoryDetail.name),
+    path("amenities/",               views.AmenityList.as_view(),    name=views.AmenityList.name),
     path("properties/",              views.PropertyList.as_view(),   name=views.PropertyList.name),
     path("properties/<int:pk>/",     views.PropertyDetail.as_view(), name=views.PropertyDetail.name),
 

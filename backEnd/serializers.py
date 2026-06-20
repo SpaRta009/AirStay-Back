@@ -1,4 +1,4 @@
-from .models import Category, Notification, Property, City, Booking, User, PropertyImage
+from .models import Category, Notification, Property, City, Booking, User, PropertyImage, Amenity
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 
@@ -156,6 +156,16 @@ class CategorySerializer(serializers.ModelSerializer):
 
 
 # ─────────────────────────────
+# Amenity
+# ─────────────────────────────
+class AmenitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Amenity
+        fields = ('id', 'name', 'icon', 'is_custom')
+        read_only_fields = ('is_custom',)
+
+
+# ─────────────────────────────
 # Property
 # ─────────────────────────────
 class PropertySerializer(GeoFeatureModelSerializer):
@@ -177,6 +187,14 @@ class PropertySerializer(GeoFeatureModelSerializer):
     owner = UserSerializer(read_only=True)
     image = serializers.SerializerMethodField()
     images = PropertyImageSerializer(many=True, read_only=True)
+    amenities = AmenitySerializer(many=True, read_only=True)
+    amenity_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Amenity.objects.all(),
+        source='amenities',
+        many=True,
+        write_only=True,
+        required=False,
+    )
 
     def get_image(self, obj):
         # 🚨 FIX ULTIME : Si pas de cover, on renvoie null. Plus de fallback !
@@ -204,6 +222,10 @@ class PropertySerializer(GeoFeatureModelSerializer):
             'description',
             'price_per_night',
             'max_guests',
+            'bedrooms',
+            'bathrooms',
+            'amenities',
+            'amenity_ids',
             'created_at',
             'modified_at',
             'image',

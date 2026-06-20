@@ -1,7 +1,8 @@
-from .models import Property, Category, City, User, Booking, PropertyImage, Wishlist, Notification
+from .models import Property, Category, City, User, Booking, PropertyImage, Wishlist, Notification, Amenity
 from .serializers import (
     CategorySerializer, CitySerializer, PropertySerializer,
-    BookingSerializer, PropertyImageSerializer, NotificationSerializer
+    BookingSerializer, PropertyImageSerializer, NotificationSerializer,
+    AmenitySerializer
 )
 # ─────────────────────────────────────────────────────────────────────────────
 # CLOUDINARY SIGNED-URL FIX — settings.py checklist
@@ -72,6 +73,39 @@ class CategoryDetail(generics.RetrieveUpdateDestroyAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     name = 'category-detail'
+
+
+# ─────────────────────────────────────────
+# Amenities
+# ─────────────────────────────────────────
+class AmenityList(generics.ListCreateAPIView):
+    """
+    GET  -> liste tous les amenities (standards + ceux ajoutés par des hôtes).
+    POST -> permet à un hôte d'ajouter un amenity "custom" qui n'est pas
+            encore dans la liste (ex: 'Sauna', 'Jacuzzi privé'...).
+            Si un amenity du même nom existe déjà (insensible à la casse),
+            on le renvoie au lieu d'en créer un doublon.
+    """
+    queryset = Amenity.objects.all()
+    serializer_class = AmenitySerializer
+    name = 'amenity-list'
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def create(self, request, *args, **kwargs):
+        name = (request.data.get('name') or '').strip()
+        if not name:
+            return Response({'error': "Le nom de l'amenity est requis."}, status=400)
+
+        existing = Amenity.objects.filter(name__iexact=name).first()
+        if existing:
+            return Response(self.get_serializer(existing).data, status=200)
+
+        amenity = Amenity.objects.create(
+            name=name,
+            icon=request.data.get('icon', 'check'),
+            is_custom=True,
+        )
+        return Response(self.get_serializer(amenity).data, status=201)
 
 
 # ─────────────────────────────────────────
@@ -161,6 +195,8 @@ class PropertyList(generics.ListCreateAPIView):
             return Response({'error': 'price_per_night est requis.'}, status=400)
 
         max_guests = data.get('max_guests', 2)
+        bedrooms = data.get('bedrooms', 1)
+        bathrooms = data.get('bathrooms', 1)
 
         prop = Property.objects.create(
             category=category,
@@ -170,10 +206,18 @@ class PropertyList(generics.ListCreateAPIView):
             description=data.get('description', ''),
             price_per_night=price,
             max_guests=max_guests,
+            bedrooms=bedrooms,
+            bathrooms=bathrooms,
             point_geom=point,
             image=request.FILES.get('image'),
             active=True,
         )
+
+        # amenity_ids peut arriver en FormData répété ("amenity_ids": ["1","2","3"])
+        amenity_ids = data.getlist('amenity_ids') if hasattr(data, 'getlist') else data.get('amenity_ids', [])
+        if amenity_ids:
+            valid_ids = Amenity.objects.filter(pk__in=amenity_ids)
+            prop.amenities.set(valid_ids)
 
         serializer = self.get_serializer(prop, context={'request': request})
         return Response(serializer.data, status=201)
@@ -223,10 +267,29 @@ class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
             serializer = self.get_serializer(prop, data=mutable, partial=True)
             serializer.is_valid(raise_exception=True)
             serializer.save()
+
+            if request.data.get('amenities_submitted') and not request.data.get('amenity_ids') and not (
+                hasattr(request.data, 'getlist') and request.data.getlist('amenity_ids')
+            ):
+                prop.amenities.clear()
+
             return Response(serializer.data)
 
         # No new image: update text fields only, never touch Property.image.
-        return super().update(request, *args, **kwargs)
+        response = super().update(request, *args, **kwargs)
+
+        # ✅ FIX: if the form was submitted with the amenities section visible
+        # but the host deselected everything, FormData sends NO 'amenity_ids'
+        # key at all — DRF then treats the field as absent and leaves the old
+        # M2M untouched. We detect that case explicitly via a marker field
+        # ('amenities_submitted') sent by the frontend whenever the amenities
+        # step was rendered, and clear the M2M if no ids came with it.
+        if request.data.get('amenities_submitted') and not request.data.get('amenity_ids') and not (
+            hasattr(request.data, 'getlist') and request.data.getlist('amenity_ids')
+        ):
+            prop.amenities.clear()
+
+        return response
 
 
 # ─────────────────────────────────────────
