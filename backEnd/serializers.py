@@ -109,6 +109,8 @@ class UserSerializer(serializers.ModelSerializer):
             'last_name',
             'phone_number',
             'role',
+            'is_superhost',
+            'date_joined',
         )
         read_only_fields = fields
 
@@ -169,6 +171,7 @@ class AmenitySerializer(serializers.ModelSerializer):
 # ─────────────────────────────
 class ReviewSerializer(serializers.ModelSerializer):
     user_username = serializers.ReadOnlyField(source='user.username')
+    comment = serializers.CharField(required=False, allow_blank=True, default="")
 
     class Meta:
         model = Review
