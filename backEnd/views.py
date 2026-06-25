@@ -223,6 +223,11 @@ class PropertyList(generics.ListCreateAPIView):
 
         serializer = self.get_serializer(prop, context={'request': request})
         return Response(serializer.data, status=201)
+    
+    def post(self, request, *args, **kwargs):
+        print("--- DEBUG : REQUÊTE POST REÇUE SUR /PROPERTIES/ ---")
+        print("Données reçues :", request.data)
+        return super().post(request, *args, **kwargs)
 
 
 class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
