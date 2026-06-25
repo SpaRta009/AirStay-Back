@@ -1,11 +1,9 @@
 from pathlib import Path
 import os
-import dj_database_url
 from dotenv import load_dotenv
 
-load_dotenv()
-
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / '.env')                     # ← then load with explicit path
 
 import sys
 import ctypes
@@ -93,11 +91,15 @@ WSGI_APPLICATION = 'AirBNB.wsgi.application'
 # =====================
 
 DATABASES = {
-    'default': dj_database_url.config(
-        default=os.environ.get('DATABASE_URL'),
-        conn_max_age=600,
-        ssl_require=True
-    )
+    'default': {
+        'ENGINE': 'django.contrib.gis.db.backends.postgis',
+        'NAME': 'postgres',
+        'USER': 'postgres',
+        'PASSWORD': 'Malaga2025Airbnb',
+        'HOST': 'db.fvfjjjgrmvssaswrlbua.supabase.co',
+        'PORT': '5432',
+        'OPTIONS': {'sslmode': 'require'},
+    }
 }
 DATABASES['default']['ENGINE'] = 'django.contrib.gis.db.backends.postgis'
 # =====================
