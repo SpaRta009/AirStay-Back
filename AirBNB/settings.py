@@ -93,18 +93,11 @@ WSGI_APPLICATION = 'AirBNB.wsgi.application'
 # =====================
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.contrib.gis.db.backends.postgis',
-        'NAME': 'postgres',
-        'USER': 'postgres.fvfjjjgrmvssaswrlbua',
-        'PASSWORD': 'Malaga070502*',
-        'HOST': 'aws-1-eu-west-2.pooler.supabase.com',
-        'PORT': '5432',
-        'OPTIONS': {
-            'sslmode': 'require',
-            'connect_timeout': 10,
-        }
-    }
+    'default': dj_database_url.config(
+        default=os.environ.get('DATABASE_URL'),
+        conn_max_age=600,
+        ssl_require=True
+    )
 }
 
 # =====================
