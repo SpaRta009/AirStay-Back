@@ -39,6 +39,11 @@ api_urlpatterns = [
     path("notifications/read-all/",          views.notification_mark_all_read, name="notification-read-all"),
     path("notifications/<int:pk>/read/",     views.notification_mark_read,    name="notification-mark-read"),
     path("notifications/<int:pk>/",          views.notification_delete,       name="notification-delete"),
+
+    path("subscriptions/plans/",     views.subscription_plans, name="subscription-plans"),
+    path("subscriptions/subscribe/", views.subscribe,          name="subscribe"),
+    path("credits/wallet/",          views.credit_wallet,      name="credit-wallet"),
+    path("credits/history/",         views.credit_history,     name="credit-history"),
 ]
 
 # ✅ Routes wishlist séparées — exclues de format_suffix_patterns

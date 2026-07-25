@@ -1,5 +1,5 @@
 from django.contrib.gis import admin
-from .models import Category, Notification, Property, City, Booking, User, PropertyImage, Wishlist, Amenity, Review
+from .models import Category, Notification, Property, City, Booking, User, PropertyImage, Wishlist, Amenity, Review, SubscriptionPlan, Subscription, CreditBatch, CreditTransaction
 # Register your models here.
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
@@ -65,3 +65,24 @@ class ReviewAdmin(admin.ModelAdmin):
     list_display = ['id', 'property', 'user', 'rating', 'created_at']
     list_filter = ['rating', 'created_at']
     search_fields = ['property__property_name', 'user__username', 'comment']
+
+# ============================================================
+
+@admin.register(SubscriptionPlan)
+class SubscriptionPlanAdmin(admin.ModelAdmin):
+    list_display = ['plan_type', 'credits', 'price_da']
+
+@admin.register(Subscription)
+class SubscriptionAdmin(admin.ModelAdmin):
+    list_display = ['user', 'plan', 'started_at', 'is_paid']
+    list_filter = ['plan', 'is_paid']
+
+@admin.register(CreditBatch)
+class CreditBatchAdmin(admin.ModelAdmin):
+    list_display = ['user', 'remaining', 'amount', 'purchased_at', 'expires_at']
+    list_filter = ['expires_at']
+
+@admin.register(CreditTransaction)
+class CreditTransactionAdmin(admin.ModelAdmin):
+    list_display = ['user', 'action', 'amount', 'property', 'created_at']
+    list_filter = ['action', 'created_at']

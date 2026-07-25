@@ -1,11 +1,13 @@
 import os
 import uuid
-from django.db import models
+from django.db import models, transaction
 from django.contrib.gis.db import models as gis_models
 from django.contrib.auth.models import AbstractUser
 from django.forms import ValidationError
 from django.utils.text import slugify  # ✅ Importé pour nettoyer les noms de fichiers
 from django.core.validators import MinValueValidator, MaxValueValidator
+from datetime import date
+from dateutil.relativedelta import relativedelta 
 
 
 # ✅ Nouvelle fonction pour nettoyer et sécuriser le nom des images
@@ -228,3 +230,79 @@ class Notification(models.Model):
  
     def __str__(self):
         return f"{self.user.username} — {self.type}"
+
+def default_expiry():
+    """Un lot de crédits achetés ce mois-ci expire à la fin du mois suivant."""
+    today = date.today()
+    first_of_next_next_month = (today.replace(day=1) + relativedelta(months=2))
+    return first_of_next_next_month  # ex: achat en janvier -> expire le 1er mars
+
+
+class SubscriptionPlan(models.Model):
+    """Catalogue statique des offres (monthly / yearly)."""
+    MONTHLY = 'monthly'
+    YEARLY = 'yearly'
+    PLAN_CHOICES = [(MONTHLY, 'Monthly'), (YEARLY, 'Yearly')]
+
+    plan_type = models.CharField(max_length=10, choices=PLAN_CHOICES, unique=True)
+    credits = models.PositiveIntegerField()      # 70 ou 840
+    price_da = models.DecimalField(max_digits=10, decimal_places=2)  # 1000 ou 9000
+
+    def __str__(self):
+        return f"{self.plan_type} - {self.credits} credits - {self.price_da} DA"
+
+
+class Subscription(models.Model):
+    """Historique des abonnements souscrits par un utilisateur (à but d'audit / affichage)."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='subscriptions')
+    plan = models.ForeignKey(SubscriptionPlan, on_delete=models.PROTECT)
+    started_at = models.DateTimeField(auto_now_add=True)
+    # simple trace du paiement — à brancher sur ton vrai système de paiement
+    is_paid = models.BooleanField(default=True)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.plan.plan_type} ({self.started_at.date()})"
+
+
+class CreditBatch(models.Model):
+    """
+    Un lot de crédits achetés à une date donnée.
+    Consommé en FIFO. Expire automatiquement.
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='credit_batches')
+    subscription = models.ForeignKey(Subscription, on_delete=models.CASCADE,
+                                      related_name='batches', null=True, blank=True)
+    amount = models.PositiveIntegerField()          # crédits initiaux du lot
+    remaining = models.PositiveIntegerField()        # crédits restants dans ce lot
+    purchased_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateField(default=default_expiry)  # 1er jour du mois où ça expire
+
+    class Meta:
+        ordering = ['purchased_at']  # FIFO : le plus ancien d'abord
+
+    def is_expired(self):
+        return date.today() >= self.expires_at
+
+    def __str__(self):
+        return f"{self.user.username} - {self.remaining}/{self.amount} (exp {self.expires_at})"
+
+
+class CreditTransaction(models.Model):
+    """Journal de chaque mouvement de crédit (achat / consommation / expiration)."""
+    ACTION_CHOICES = [
+        ('purchase', 'Purchase'),
+        ('property_create', 'Property Create'),
+        ('property_edit', 'Property Edit'),
+        ('expired', 'Expired'),
+    ]
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='credit_transactions')
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    amount = models.IntegerField()  # positif = crédit, négatif = débit
+    property = models.ForeignKey(Property, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.username} {self.action} {self.amount}"

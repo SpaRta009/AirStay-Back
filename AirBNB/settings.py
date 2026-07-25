@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import sys
 import dj_database_url
 from dotenv import load_dotenv
 
@@ -7,14 +8,34 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-import sys
-import ctypes
-
+# =====================
+# ✅ Config GDAL/GEOS pour Windows (dev local)
+# =====================
 if sys.platform == "win32":
-    GDAL_DLL_PATH = r"D:\AirBNB\.venv\Lib\site-packages\osgeo\gdal304.dll"
+    GDAL_DIR = r"C:\Program Files\GDAL"
+
+    GDAL_DLL_PATH = os.path.join(GDAL_DIR, "gdal311.dll")
     if os.path.exists(GDAL_DLL_PATH):
-        ctypes.CDLL(GDAL_DLL_PATH)
         GDAL_LIBRARY_PATH = GDAL_DLL_PATH
+
+    # Recherche automatique de geos_c.dll (fourni par shapely dans le venv)
+    try:
+        import shapely
+        GEOS_CANDIDATES = list(Path(shapely.__file__).parent.rglob("geos_c*.dll"))
+        if GEOS_CANDIDATES:
+            GEOS_LIBRARY_PATH = str(GEOS_CANDIDATES[0])
+    except ImportError:
+        pass
+
+    # Données GDAL (proj, epsg, etc.) — laissé en best-effort, ne bloque pas si absent
+    _gdal_data = os.path.join(GDAL_DIR, "gdal-data")
+    _proj_lib = os.path.join(GDAL_DIR, "projlib")
+    if os.path.exists(_gdal_data):
+        os.environ['GDAL_DATA'] = _gdal_data
+    if os.path.exists(_proj_lib):
+        os.environ['PROJ_LIB'] = _proj_lib
+
+    os.environ['PATH'] = GDAL_DIR + os.pathsep + os.environ.get('PATH', '')
 
 # =====================
 # Sécurité

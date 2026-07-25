@@ -1,8 +1,17 @@
-from .models import Property, Category, City, User, Booking, PropertyImage, Wishlist, Notification, Amenity, Review
+from .models import (
+    Property, Category, City, User, Booking, PropertyImage, Wishlist,
+    Notification, Amenity, Review,
+    SubscriptionPlan, Subscription, CreditBatch, CreditTransaction,
+)
 from .serializers import (
     CategorySerializer, CitySerializer, PropertySerializer,
     BookingSerializer, PropertyImageSerializer, NotificationSerializer,
-    AmenitySerializer, ReviewSerializer
+    AmenitySerializer, ReviewSerializer,
+    SubscriptionPlanSerializer, CreditWalletSerializer, CreditTransactionSerializer,
+)
+from .credits_utils import (
+    consume_credits, get_balance, add_credit_batch,
+    InsufficientCreditsError, CREDIT_COST_CREATE, CREDIT_COST_EDIT,
 )
 # ─────────────────────────────────────────────────────────────────────────────
 # CLOUDINARY SIGNED-URL FIX — settings.py checklist
@@ -39,6 +48,7 @@ from django.contrib.gis.geos import Point
 from django.contrib.gis.measure import D
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db import transaction
 from datetime import timedelta
 import logging
 
@@ -151,6 +161,18 @@ class PropertyList(generics.ListCreateAPIView):
     def create(self, request, *args, **kwargs):
         data = request.data
 
+        # ── Vérification des crédits AVANT toute création ──
+        if not request.user or not request.user.is_authenticated:
+            return Response({'error': 'Authentication required.'}, status=401)
+
+        current_balance = get_balance(request.user)
+        if current_balance < CREDIT_COST_CREATE:
+            return Response(
+                {'error': f"Crédits insuffisants pour publier une annonce "
+                          f"({CREDIT_COST_CREATE} requis, {current_balance} disponible(s))."},
+                status=402,  # Payment Required
+            )
+
         cat_val = data.get('category')
         if not cat_val:
             return Response({'error': 'category est requis.'}, status=400)
@@ -200,26 +222,35 @@ class PropertyList(generics.ListCreateAPIView):
         bedrooms = data.get('bedrooms', 1)
         bathrooms = data.get('bathrooms', 1)
 
-        prop = Property.objects.create(
-            category=category,
-            city=city,
-            owner=request.user,
-            property_name=property_name,
-            description=data.get('description', ''),
-            price_per_night=price,
-            max_guests=max_guests,
-            bedrooms=bedrooms,
-            bathrooms=bathrooms,
-            point_geom=point,
-            image=request.FILES.get('image'),
-            active=True,
-        )
+        with transaction.atomic():
+            prop = Property.objects.create(
+                category=category,
+                city=city,
+                owner=request.user,
+                property_name=property_name,
+                description=data.get('description', ''),
+                price_per_night=price,
+                max_guests=max_guests,
+                bedrooms=bedrooms,
+                bathrooms=bathrooms,
+                point_geom=point,
+                image=request.FILES.get('image'),
+                active=True,
+            )
 
-        # amenity_ids peut arriver en FormData répété ("amenity_ids": ["1","2","3"])
-        amenity_ids = data.getlist('amenity_ids') if hasattr(data, 'getlist') else data.get('amenity_ids', [])
-        if amenity_ids:
-            valid_ids = Amenity.objects.filter(pk__in=amenity_ids)
-            prop.amenities.set(valid_ids)
+            # amenity_ids peut arriver en FormData répété ("amenity_ids": ["1","2","3"])
+            amenity_ids = data.getlist('amenity_ids') if hasattr(data, 'getlist') else data.get('amenity_ids', [])
+            if amenity_ids:
+                valid_ids = Amenity.objects.filter(pk__in=amenity_ids)
+                prop.amenities.set(valid_ids)
+
+            # ── Consommation du crédit APRÈS la création réussie ──
+            try:
+                consume_credits(request.user, CREDIT_COST_CREATE, 'property_create', property_obj=prop)
+            except InsufficientCreditsError as e:
+                # sécurité en cas de race condition entre la vérif et la création
+                transaction.set_rollback(True)
+                return Response({'error': str(e)}, status=402)
 
         serializer = self.get_serializer(prop, context={'request': request})
         return Response(serializer.data, status=201)
@@ -236,6 +267,37 @@ class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
     name = 'properties-detail'
     permission_classes = [IsAuthenticatedOrReadOnly]
 
+    # Champs comparés pour détecter un "vrai" changement (hors image, gérée à part)
+    TRACKED_FIELDS = [
+        'property_name', 'description', 'price_per_night', 'max_guests',
+        'bedrooms', 'bathrooms', 'active', 'category_id', 'city_id',
+    ]
+
+    def _snapshot(self, prop):
+        snap = {f: getattr(prop, f) for f in self.TRACKED_FIELDS}
+        snap['amenities'] = set(prop.amenities.values_list('id', flat=True))
+        snap['image_name'] = prop.image.name if prop.image else None
+        return snap
+
+    def _charge_if_changed(self, request, prop, before_snapshot, image_changed=False):
+        """Compare l'état avant/après et débite 1 crédit uniquement si quelque chose a réellement changé."""
+        prop.refresh_from_db()
+        after_snapshot = self._snapshot(prop)
+
+        # l'image peut avoir été explicitement remplacée même si son "name" diffère
+        changed = image_changed or any(
+            before_snapshot[f] != after_snapshot[f] for f in self.TRACKED_FIELDS
+        ) or before_snapshot['amenities'] != after_snapshot['amenities']
+
+        if not changed:
+            return None  # rien à facturer
+
+        try:
+            consume_credits(request.user, CREDIT_COST_EDIT, 'property_edit', property_obj=prop)
+        except InsufficientCreditsError as e:
+            return str(e)
+        return None
+
     def update(self, request, *args, **kwargs):
         prop = self.get_object()
         if request.user != prop.owner:
@@ -243,6 +305,12 @@ class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
                 {'error': 'You do not have permission to edit this property.'},
                 status=403
             )
+
+        # ── Vérif de solde AVANT tout, pour éviter de sauvegarder puis échouer ──
+        # (on autorise quand même la requête si au final rien n'est réellement modifié,
+        #  donc on ne bloque pas ici — on bloque seulement si un changement est détecté après coup)
+
+        before_snapshot = self._snapshot(prop)
 
         # Always partial so absent fields (image, city, category) are never blanked.
         kwargs['partial'] = True
@@ -280,6 +348,10 @@ class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
             ):
                 prop.amenities.clear()
 
+            credit_error = self._charge_if_changed(request, prop, before_snapshot, image_changed=True)
+            if credit_error:
+                return Response({'error': credit_error}, status=402)
+
             return Response(serializer.data)
 
         # No new image: update text fields only, never touch Property.image.
@@ -295,6 +367,10 @@ class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
             hasattr(request.data, 'getlist') and request.data.getlist('amenity_ids')
         ):
             prop.amenities.clear()
+
+        credit_error = self._charge_if_changed(request, prop, before_snapshot, image_changed=False)
+        if credit_error:
+            return Response({'error': credit_error}, status=402)
 
         return response
 
@@ -1006,3 +1082,47 @@ class ReviewDetailView(generics.RetrieveUpdateDestroyAPIView):
         obj = get_object_or_404(self.get_queryset(), pk=self.kwargs['review_pk'])
         self.check_object_permissions(self.request, obj)
         return obj
+
+
+# ─────────────────────────────────────────
+# Crédits & Abonnements
+# ─────────────────────────────────────────
+@api_view(['GET'])
+def subscription_plans(request):
+    plans = SubscriptionPlan.objects.all()
+    return Response(SubscriptionPlanSerializer(plans, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def credit_wallet(request):
+    return Response(CreditWalletSerializer(request.user).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def credit_history(request):
+    qs = CreditTransaction.objects.filter(user=request.user)[:50]
+    return Response(CreditTransactionSerializer(qs, many=True).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def subscribe(request):
+    """
+    body: { "plan_type": "monthly" | "yearly" }
+    ⚠️ Brancher ici le vrai système de paiement (CIB/Edahabia/etc.)
+    AVANT d'appeler add_credit_batch — pour l'instant is_paid=True est
+    posé directement, à remplacer par une confirmation de paiement réelle.
+    """
+    plan_type = request.data.get('plan_type')
+    try:
+        plan = SubscriptionPlan.objects.get(plan_type=plan_type)
+    except SubscriptionPlan.DoesNotExist:
+        return Response({'error': 'Invalid plan'}, status=400)
+
+    with transaction.atomic():
+        sub = Subscription.objects.create(user=request.user, plan=plan, is_paid=True)
+        add_credit_batch(request.user, plan.credits, subscription=sub)
+
+    return Response(CreditWalletSerializer(request.user).data, status=201)

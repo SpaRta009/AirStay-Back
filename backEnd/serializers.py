@@ -1,6 +1,7 @@
-from .models import Category, Notification, Property, City, Booking, User, PropertyImage, Amenity, Review
+from .models import Category, Notification, Property, City, Booking, User, PropertyImage, Amenity, Review, SubscriptionPlan, Subscription, CreditBatch, CreditTransaction
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
+from .credits_utils import get_balance
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -359,3 +360,31 @@ class NotificationSerializer(serializers.ModelSerializer):
 
     def get_booking_id(self, obj):
         return obj.booking.pk if obj.booking else None
+
+class SubscriptionPlanSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubscriptionPlan
+        fields = ('id', 'plan_type', 'credits', 'price_da')
+
+
+class CreditWalletSerializer(serializers.Serializer):
+    """Non lié à un modèle : renvoie juste le solde courant + le détail des lots actifs."""
+    balance = serializers.SerializerMethodField()
+    batches = serializers.SerializerMethodField()
+
+    def get_balance(self, user):
+        return get_balance(user)
+
+    def get_batches(self, user):
+        from datetime import date
+        qs = CreditBatch.objects.filter(user=user, remaining__gt=0, expires_at__gt=date.today())
+        return [
+            {'remaining': b.remaining, 'amount': b.amount, 'expires_at': b.expires_at}
+            for b in qs
+        ]
+
+
+class CreditTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CreditTransaction
+        fields = ('id', 'action', 'amount', 'property', 'created_at')
