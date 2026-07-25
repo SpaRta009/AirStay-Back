@@ -1,7 +1,6 @@
-frontEnd/
+﻿__pycache__/
+*.pyc
+backup_railway.sql
+log_erreur.txt
+*.env
 .env
-*.dump
-node_modules/
-package.json
-package-lock.json
-supabase/
