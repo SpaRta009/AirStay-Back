@@ -640,7 +640,8 @@ def profile_image_upload(request):
         logger.error(f"[ProfileImage] Failed to save image for {user.username}: {e}", exc_info=True)
         return Response({'error': f'Failed to save image: {str(e)}'}, status=500)
 
-    return Response(UserSerializer(user, context={'request': request}).data, status=200)
+    profile_image_url = request.build_absolute_uri(user.profile_image.url) if user.profile_image else None
+    return Response({'profileImage': profile_image_url}, status=200)
 
 
 @api_view(['DELETE'])
@@ -657,7 +658,7 @@ def profile_image_delete(request):
         user.profile_image = None
         user.save(update_fields=['profile_image'])
 
-    return Response(UserSerializer(user, context={'request': request}).data, status=200)
+    return Response({'profileImage': None}, status=200)
 
 
 # ─────────────────────────────────────────
@@ -695,6 +696,7 @@ def register(request):
                 'firstName': user.first_name,
                 'lastName': user.last_name,
                 'phone': user.phone_number or '',
+                'profileImage': None,
             }
         }, status=201)
     except Exception as e:
