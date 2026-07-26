@@ -25,6 +25,17 @@ def upload_property_image_path(instance, filename):
     return f"property_images/{safe_name}_{unique_id}{ext}"
 
 
+def upload_profile_image_path(instance, filename):
+    name, ext = os.path.splitext(filename)
+    safe_name = slugify(name)
+    if not safe_name:
+        safe_name = "avatar"
+    safe_name = safe_name[:40]
+
+    unique_id = uuid.uuid4().hex[:8]
+    return f"profile_images/{safe_name}_{unique_id}{ext}"
+
+
 class User(AbstractUser):
     second_name = models.CharField(max_length=30, blank=True, null=True)
     phone_number = models.CharField(max_length=15, unique=True, blank=True, null=True)
@@ -36,6 +47,9 @@ class User(AbstractUser):
     # Superhost status is set manually by admins (e.g. via Django admin).
     # It is NEVER derived from listing order or any client-visible heuristic.
     is_superhost = models.BooleanField(default=False)
+    profile_image = models.ImageField(
+        upload_to=upload_profile_image_path, blank=True, null=True, max_length=200
+    )
 
     class Meta:
         verbose_name_plural = 'Users'

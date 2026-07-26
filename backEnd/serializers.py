@@ -100,6 +100,8 @@ def fix_cloudinary_url(url: str) -> str:
 # User
 # ─────────────────────────────
 class UserSerializer(serializers.ModelSerializer):
+    profile_image = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = (
@@ -111,9 +113,21 @@ class UserSerializer(serializers.ModelSerializer):
             'phone_number',
             'role',
             'is_superhost',
+            'profile_image',
             'date_joined',
         )
         read_only_fields = fields
+
+    def get_profile_image(self, obj):
+        if not obj.profile_image:
+            return None
+        url = fix_cloudinary_url(obj.profile_image.url)
+        if url.startswith("http"):
+            return url
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(url)
+        return url
 
 
 # ─────────────────────────────

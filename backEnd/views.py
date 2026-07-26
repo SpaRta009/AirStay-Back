@@ -8,6 +8,7 @@ from .serializers import (
     BookingSerializer, PropertyImageSerializer, NotificationSerializer,
     AmenitySerializer, ReviewSerializer,
     SubscriptionPlanSerializer, CreditWalletSerializer, CreditTransactionSerializer,
+    UserSerializer,
 )
 from .credits_utils import (
     consume_credits, get_balance, add_credit_batch,
@@ -611,6 +612,55 @@ def property_set_cover(request, pk, img_pk):
     return Response(serializer.data, status=200)
 
 # ─────────────────────────────────────────
+# Profile image (current user's avatar)
+# ─────────────────────────────────────────
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def profile_image_upload(request):
+    """Sets/replaces the logged-in user's profile picture."""
+    image_file = request.FILES.get('image')
+    if not image_file:
+        return Response({'error': 'No image provided.'}, status=400)
+    if not image_file.content_type.startswith('image/'):
+        return Response({'error': 'File must be an image.'}, status=400)
+
+    user = request.user
+
+    # Delete the old Cloudinary file (if any) before attaching the new one.
+    if user.profile_image:
+        try:
+            user.profile_image.delete(save=False)
+        except Exception as e:
+            logger.warning(f"[ProfileImage] Cloudinary file deletion failed for {user.username}: {e}")
+
+    try:
+        user.profile_image = image_file
+        user.save(update_fields=['profile_image'])
+    except Exception as e:
+        logger.error(f"[ProfileImage] Failed to save image for {user.username}: {e}", exc_info=True)
+        return Response({'error': f'Failed to save image: {str(e)}'}, status=500)
+
+    return Response(UserSerializer(user, context={'request': request}).data, status=200)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def profile_image_delete(request):
+    """Removes the logged-in user's profile picture."""
+    user = request.user
+
+    if user.profile_image:
+        try:
+            user.profile_image.delete(save=False)
+        except Exception as e:
+            logger.warning(f"[ProfileImage] Cloudinary file deletion failed for {user.username}: {e}")
+        user.profile_image = None
+        user.save(update_fields=['profile_image'])
+
+    return Response(UserSerializer(user, context={'request': request}).data, status=200)
+
+
+# ─────────────────────────────────────────
 # Auth
 # ─────────────────────────────────────────
 @api_view(['POST'])
@@ -668,6 +718,9 @@ def login_view(request):
         user = authenticate(username=user_obj.username, password=password)
         if user:
             token, _ = Token.objects.get_or_create(user=user)
+            profile_image_url = None
+            if user.profile_image:
+                profile_image_url = request.build_absolute_uri(user.profile_image.url)
             return Response({
                 'token': token.key,
                 'user': {
@@ -678,6 +731,7 @@ def login_view(request):
                     'firstName': user.first_name,
                     'lastName': user.last_name,
                     'phone': user.phone_number or '',
+                    'profileImage': profile_image_url,
                 }
             })
         return Response({'error': 'Mot de passe incorrect.'}, status=400)

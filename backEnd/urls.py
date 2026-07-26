@@ -29,6 +29,8 @@ api_urlpatterns = [
 
     path("auth/register/",           views.register,                 name="register"),
     path("auth/login/",              views.login_view,               name="login"),
+    path("profile/image/",           views.profile_image_upload,     name="profile-image-upload"),
+    path("profile/image/delete/",    views.profile_image_delete,     name="profile-image-delete"),
     path("bookings/",                views.booking_create,           name="booking-create"),
     path("bookings/list/",           views.booking_list,             name="booking-list"),
 

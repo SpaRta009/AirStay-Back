@@ -8,9 +8,14 @@ class CategoryAdmin(admin.ModelAdmin):
 
 @admin.register(User)
 class CustomUserAdmin(admin.ModelAdmin):
-    list_display = ['username', 'email', 'role', 'phone_number']
+    list_display = ['username', 'email', 'role', 'phone_number', 'has_profile_image']
     search_fields = ['username', 'email', 'phone_number']
     list_filter = ['role']
+
+    def has_profile_image(self, obj):
+        return bool(obj.profile_image)
+    has_profile_image.boolean = True
+    has_profile_image.short_description = 'Photo'
 
 class CustomGeoAdmin(admin.GISModelAdmin):
     gis_widget_kwargs = {
