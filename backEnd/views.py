@@ -897,6 +897,13 @@ def booking_list(request):
 @permission_classes([IsAuthenticated])
 def notification_list(request):
     try:
+        # Auto-expire: notifications older than 1 month are permanently deleted.
+        one_month_ago = timezone.now() - timedelta(days=30)
+        Notification.objects.filter(
+            user=request.user,
+            created_at__lt=one_month_ago,
+        ).delete()
+
         notifs = Notification.objects.filter(user=request.user).order_by('-created_at')[:50]
         serializer = NotificationSerializer(notifs, many=True, context={'request': request})
         return Response(serializer.data, status=200)
