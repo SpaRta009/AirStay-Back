@@ -685,10 +685,26 @@ def profile_update(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def my_properties(request):
-    """List the logged-in user's own listings (host 'my listings' tab)."""
-    qs = Property.objects.filter(owner=request.user).order_by('-created_at')
+    """
+    List a host's listings.
+    - No query param -> the logged-in user's own listings (auth required), including inactive ones.
+    - ?user_id=<id>  -> that user's public listings (active only), for viewing someone else's profile.
+    """
+    user_id = request.query_params.get('user_id')
+
+    if user_id:
+        try:
+            owner = User.objects.get(pk=user_id)
+        except (User.DoesNotExist, ValueError):
+            return Response({'error': 'User not found.'}, status=404)
+        qs = Property.objects.filter(owner=owner, active=True).order_by('-created_at')
+    else:
+        if not request.user or not request.user.is_authenticated:
+            return Response({'error': 'Authentication required.'}, status=401)
+        qs = Property.objects.filter(owner=request.user).order_by('-created_at')
+
     serializer = PropertySerializer(qs, many=True, context={'request': request})
     return Response(serializer.data)
 
