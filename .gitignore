@@ -4,3 +4,8 @@ backup_railway.sql
 log_erreur.txt
 *.env
 .env
+
+frontEnd/
+node_modules/
+__pycache__/
+*.pyc
