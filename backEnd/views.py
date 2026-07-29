@@ -706,7 +706,11 @@ def my_properties(request):
         qs = Property.objects.filter(owner=request.user).order_by('-created_at')
 
     serializer = PropertySerializer(qs, many=True, context={'request': request})
-    return Response(serializer.data)
+    # PropertySerializer is a GeoFeatureModelSerializer, so with many=True its
+    # .data is a FeatureCollection ({"type": ..., "features": [...]}), not a
+    # bare array — unwrap it so the frontend gets the array it expects
+    # (same shape as PropertyList / home.tsx's `data.features`).
+    return Response(serializer.data['features'])
 
 
 # ─────────────────────────────────────────
