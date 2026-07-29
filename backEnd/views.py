@@ -1,0 +1,1223 @@
+from .models import (
+    Property, Category, City, User, Booking, PropertyImage, Wishlist,
+    Notification, Amenity, Review,
+    SubscriptionPlan, Subscription, CreditBatch, CreditTransaction,
+)
+from .serializers import (
+    CategorySerializer, CitySerializer, PropertySerializer,
+    BookingSerializer, PropertyImageSerializer, NotificationSerializer,
+    AmenitySerializer, ReviewSerializer,
+    SubscriptionPlanSerializer, CreditWalletSerializer, CreditTransactionSerializer,
+    UserSerializer, UserUpdateSerializer,
+)
+from .credits_utils import (
+    consume_credits, get_balance, add_credit_batch,
+    InsufficientCreditsError, CREDIT_COST_CREATE, CREDIT_COST_EDIT,
+)
+# ─────────────────────────────────────────────────────────────────────────────
+# CLOUDINARY SIGNED-URL FIX — settings.py checklist
+#
+# Images expire after 1-24 hours when Cloudinary returns signed URLs.
+# To prevent this, ensure your settings.py has:
+#
+#   CLOUDINARY_STORAGE = {
+#       'CLOUD_NAME': '...',
+#       'API_KEY':    '...',
+#       'API_SECRET': '...',
+#       # CRITICAL — these two prevent signed/expiring URLs:
+#       'SECURE':     True,   # use https (fine to keep True)
+#       'SIGN_URL':   False,  # <── must be False or absent; True = expiring URLs
+#   }
+#
+# Also confirm in your Cloudinary dashboard:
+#   Settings → Security → "Strict Transformations" should be DISABLED
+#   unless you explicitly need it.
+#
+# The fix in serializers.py (fix_cloudinary_url) strips any signatures that
+# slip through, making URLs permanent regardless of SDK configuration.
+# ─────────────────────────────────────────────────────────────────────────────
+from rest_framework import generics
+from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny, IsAuthenticated
+from rest_framework import permissions
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
+from rest_framework.authtoken.models import Token
+from rest_framework import serializers
+from django.contrib.auth import authenticate
+from django.contrib.gis.db.models.functions import Distance
+from django.contrib.gis.geos import Point
+from django.contrib.gis.measure import D
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.db import transaction
+from datetime import timedelta
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────
+# Helper: create a notification (safe)
+# ─────────────────────────────────────────
+def create_notification(user, notif_type, title, message, property_obj=None, booking_obj=None):
+    try:
+        Notification.objects.create(
+            user=user,
+            type=notif_type,
+            title=title,
+            message=message,
+            property=property_obj,
+            booking=booking_obj,
+        )
+        logger.info(f"[Notif] Created '{notif_type}' for user '{user.username}'")
+    except Exception as e:
+        logger.error(f"[Notif] Failed to create notification: {e}", exc_info=True)
+
+
+# ─────────────────────────────────────────
+# Categories
+# ─────────────────────────────────────────
+class CategoryList(generics.ListCreateAPIView):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    name = 'category-list'
+
+class CategoryDetail(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    name = 'category-detail'
+
+
+# ─────────────────────────────────────────
+# Amenities
+# ─────────────────────────────────────────
+class AmenityList(generics.ListCreateAPIView):
+    """
+    GET  -> liste tous les amenities (standards + ceux ajoutés par des hôtes).
+    POST -> permet à un hôte d'ajouter un amenity "custom" qui n'est pas
+            encore dans la liste (ex: 'Sauna', 'Jacuzzi privé'...).
+            Si un amenity du même nom existe déjà (insensible à la casse),
+            on le renvoie au lieu d'en créer un doublon.
+    """
+    queryset = Amenity.objects.all()
+    serializer_class = AmenitySerializer
+    name = 'amenity-list'
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def create(self, request, *args, **kwargs):
+        name = (request.data.get('name') or '').strip()
+        if not name:
+            return Response({'error': "Le nom de l'amenity est requis."}, status=400)
+
+        existing = Amenity.objects.filter(name__iexact=name).first()
+        if existing:
+            return Response(self.get_serializer(existing).data, status=200)
+
+        amenity = Amenity.objects.create(
+            name=name,
+            icon=request.data.get('icon', 'check'),
+            is_custom=True,
+        )
+        return Response(self.get_serializer(amenity).data, status=201)
+
+
+# ─────────────────────────────────────────
+# Properties
+# ─────────────────────────────────────────
+class PropertyList(generics.ListCreateAPIView):
+    serializer_class = PropertySerializer
+    name = 'properties-list'
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get_queryset(self):
+        qs = Property.objects.filter(active=True)
+
+        city = self.request.query_params.get('city', '').strip()
+        if city:
+            qs = qs.filter(city__city_name__icontains=city)
+
+        guests = self.request.query_params.get('guests', '')
+        if guests:
+            try:
+                qs = qs.filter(max_guests__gte=int(guests))
+            except ValueError:
+                pass
+
+        property_type = self.request.query_params.get('property_type', '').strip()
+        if property_type and property_type != 'All':
+            qs = qs.filter(category__category_name__icontains=property_type)
+
+        check_in  = self.request.query_params.get('check_in', '')
+        check_out = self.request.query_params.get('check_out', '')
+        if check_in and check_out:
+            booked_ids = Booking.objects.filter(
+                status__in=['confirmed', 'paid'],
+                check_in__lt=check_out,
+                check_out__gt=check_in,
+            ).values_list('property_id', flat=True)
+            qs = qs.exclude(pk__in=booked_ids)
+
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        data = request.data
+
+        # ── Vérification des crédits AVANT toute création ──
+        if not request.user or not request.user.is_authenticated:
+            return Response({'error': 'Authentication required.'}, status=401)
+
+        current_balance = get_balance(request.user)
+        if current_balance < CREDIT_COST_CREATE:
+            return Response(
+                {'error': f"Crédits insuffisants pour publier une annonce "
+                          f"({CREDIT_COST_CREATE} requis, {current_balance} disponible(s))."},
+                status=402,  # Payment Required
+            )
+
+        cat_val = data.get('category')
+        if not cat_val:
+            return Response({'error': 'category est requis.'}, status=400)
+        try:
+            category = Category.objects.get(pk=int(cat_val))
+        except (ValueError, TypeError):
+            try:
+                category = Category.objects.get(category_name=cat_val)
+            except Category.DoesNotExist:
+                return Response({'error': f'Catégorie "{cat_val}" introuvable.'}, status=400)
+        except Category.DoesNotExist:
+            return Response({'error': f'Catégorie ID {cat_val} introuvable.'}, status=400)
+
+        lat = data.get('lat')
+        lng = data.get('lng')
+        if not lat or not lng:
+            return Response({'error': 'lat et lng sont requis.'}, status=400)
+        try:
+            point = Point(float(lng), float(lat), srid=4326)
+        except (ValueError, TypeError):
+            return Response({'error': 'lat/lng invalides.'}, status=400)
+
+        city_val = data.get('city_id') or data.get('city')
+        city_name_val = data.get('city_name', '').strip()
+
+        if city_val:
+            try:
+                city = City.objects.get(pk=int(city_val))
+            except (City.DoesNotExist, ValueError, TypeError):
+                return Response({'error': f'Ville ID {city_val} introuvable.'}, status=400)
+        elif city_name_val:
+            city = City.objects.filter(city_name__iexact=city_name_val).first()
+            if not city:
+                city = City.objects.create(city_name=city_name_val, point_geom=point)
+        else:
+            return Response({'error': 'city ou city_name est requis.'}, status=400)
+
+        property_name = data.get('property_name', '').strip()
+        if not property_name:
+            return Response({'error': 'property_name est requis.'}, status=400)
+
+        price = data.get('price_per_night')
+        if not price:
+            return Response({'error': 'price_per_night est requis.'}, status=400)
+
+        max_guests = data.get('max_guests', 2)
+        bedrooms = data.get('bedrooms', 1)
+        bathrooms = data.get('bathrooms', 1)
+
+        with transaction.atomic():
+            prop = Property.objects.create(
+                category=category,
+                city=city,
+                owner=request.user,
+                property_name=property_name,
+                description=data.get('description', ''),
+                price_per_night=price,
+                max_guests=max_guests,
+                bedrooms=bedrooms,
+                bathrooms=bathrooms,
+                point_geom=point,
+                image=request.FILES.get('image'),
+                active=True,
+            )
+
+            # amenity_ids peut arriver en FormData répété ("amenity_ids": ["1","2","3"])
+            amenity_ids = data.getlist('amenity_ids') if hasattr(data, 'getlist') else data.get('amenity_ids', [])
+            if amenity_ids:
+                valid_ids = Amenity.objects.filter(pk__in=amenity_ids)
+                prop.amenities.set(valid_ids)
+
+            # ── Consommation du crédit APRÈS la création réussie ──
+            try:
+                consume_credits(request.user, CREDIT_COST_CREATE, 'property_create', property_obj=prop)
+            except InsufficientCreditsError as e:
+                # sécurité en cas de race condition entre la vérif et la création
+                transaction.set_rollback(True)
+                return Response({'error': str(e)}, status=402)
+
+        serializer = self.get_serializer(prop, context={'request': request})
+        return Response(serializer.data, status=201)
+    
+    def post(self, request, *args, **kwargs):
+        print("--- DEBUG : REQUÊTE POST REÇUE SUR /PROPERTIES/ ---")
+        print("Données reçues :", request.data)
+        return super().post(request, *args, **kwargs)
+
+
+class PropertyDetail(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Property.objects.filter(active=True)
+    serializer_class = PropertySerializer
+    name = 'properties-detail'
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    # Champs comparés pour détecter un "vrai" changement (hors image, gérée à part)
+    TRACKED_FIELDS = [
+        'property_name', 'description', 'price_per_night', 'max_guests',
+        'bedrooms', 'bathrooms', 'active', 'category_id', 'city_id',
+    ]
+
+    def _snapshot(self, prop):
+        snap = {f: getattr(prop, f) for f in self.TRACKED_FIELDS}
+        snap['amenities'] = set(prop.amenities.values_list('id', flat=True))
+        snap['image_name'] = prop.image.name if prop.image else None
+        return snap
+
+    def _charge_if_changed(self, request, prop, before_snapshot, image_changed=False):
+        """Compare l'état avant/après et débite 1 crédit uniquement si quelque chose a réellement changé."""
+        prop.refresh_from_db()
+        after_snapshot = self._snapshot(prop)
+
+        # l'image peut avoir été explicitement remplacée même si son "name" diffère
+        changed = image_changed or any(
+            before_snapshot[f] != after_snapshot[f] for f in self.TRACKED_FIELDS
+        ) or before_snapshot['amenities'] != after_snapshot['amenities']
+
+        if not changed:
+            return None  # rien à facturer
+
+        try:
+            consume_credits(request.user, CREDIT_COST_EDIT, 'property_edit', property_obj=prop)
+        except InsufficientCreditsError as e:
+            return str(e)
+        return None
+
+    def update(self, request, *args, **kwargs):
+        prop = self.get_object()
+        if request.user != prop.owner:
+            return Response(
+                {'error': 'You do not have permission to edit this property.'},
+                status=403
+            )
+
+        # ── Vérif de solde AVANT tout, pour éviter de sauvegarder puis échouer ──
+        # (on autorise quand même la requête si au final rien n'est réellement modifié,
+        #  donc on ne bloque pas ici — on bloque seulement si un changement est détecté après coup)
+
+        before_snapshot = self._snapshot(prop)
+
+        # Always partial so absent fields (image, city, category) are never blanked.
+        kwargs['partial'] = True
+
+        new_image = request.FILES.get('image')
+        if new_image:
+            # Save the old cover name BEFORE overwriting it.
+            old_image_name = prop.image.name if prop.image else None
+
+            # Upload new cover to Cloudinary and write it to the DB.
+            prop.image = new_image
+            prop.save(update_fields=['image'])
+
+            # Demote the old cover into the gallery so it is never lost.
+            # This is the fix: previously the old cover was simply discarded
+            # (and eventually deleted from Cloudinary) whenever a new cover
+            # was set via the edit-property form.
+            if old_image_name:
+                already_in_gallery = prop.images.filter(image=old_image_name).exists()
+                if not already_in_gallery:
+                    PropertyImage.objects.create(property=prop, image=old_image_name)
+
+            # Update text fields only — strip 'image' from the payload so the
+            # serializer never calls prop.save() on the image field a second time.
+            # A second save would cause django-cloudinary-storage to interpret the
+            # previous file as "replaced" and physically delete it from Cloudinary.
+            mutable = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+            mutable.pop('image', None)
+            serializer = self.get_serializer(prop, data=mutable, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+            if request.data.get('amenities_submitted') and not request.data.get('amenity_ids') and not (
+                hasattr(request.data, 'getlist') and request.data.getlist('amenity_ids')
+            ):
+                prop.amenities.clear()
+
+            credit_error = self._charge_if_changed(request, prop, before_snapshot, image_changed=True)
+            if credit_error:
+                return Response({'error': credit_error}, status=402)
+
+            return Response(serializer.data)
+
+        # No new image: update text fields only, never touch Property.image.
+        response = super().update(request, *args, **kwargs)
+
+        # ✅ FIX: if the form was submitted with the amenities section visible
+        # but the host deselected everything, FormData sends NO 'amenity_ids'
+        # key at all — DRF then treats the field as absent and leaves the old
+        # M2M untouched. We detect that case explicitly via a marker field
+        # ('amenities_submitted') sent by the frontend whenever the amenities
+        # step was rendered, and clear the M2M if no ids came with it.
+        if request.data.get('amenities_submitted') and not request.data.get('amenity_ids') and not (
+            hasattr(request.data, 'getlist') and request.data.getlist('amenity_ids')
+        ):
+            prop.amenities.clear()
+
+        credit_error = self._charge_if_changed(request, prop, before_snapshot, image_changed=False)
+        if credit_error:
+            return Response({'error': credit_error}, status=402)
+
+        return response
+
+
+# ─────────────────────────────────────────
+# Cities
+# ─────────────────────────────────────────
+class CityList(generics.ListAPIView):
+    serializer_class = CitySerializer
+    name = "cities-list"
+
+    def get_queryset(self):
+        qs = City.objects.all()
+        property_id = self.request.query_params.get("propertyid")
+        search = self.request.query_params.get("search")
+
+        if property_id:
+            prop = get_object_or_404(Property, pk=property_id)
+            return City.objects.annotate(
+                distance=Distance("point_geom", prop.point_geom)
+            ).order_by("distance")[:3]
+
+        if search:
+            return qs.filter(city_name__icontains=search)
+
+        return qs[:10]
+
+
+# ─────────────────────────────────────────
+# Nearby
+# ─────────────────────────────────────────
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def property_nearby(request, pk):
+    prop = get_object_or_404(Property, pk=pk, active=True)
+    nearby = (
+        Property.objects
+        .filter(active=True)
+        .exclude(pk=pk)
+        .annotate(distance=Distance('point_geom', prop.point_geom))
+        .filter(distance__lte=D(km=20))
+        .order_by('distance')[:8]
+    )
+    data = [
+        {
+            'pk': p.pk,
+            'property_name': p.property_name,
+            'distance': round(p.distance.m),
+            'price_per_night': str(p.price_per_night),
+            'city': p.city.city_name if p.city else '',
+        }
+        for p in nearby
+    ]
+    return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def nearby_all(request):
+    lat = request.query_params.get('lat')
+    lng = request.query_params.get('lng')
+
+    if not lat or not lng:
+        return Response({'error': 'Paramètres lat et lng requis.'}, status=400)
+
+    try:
+        point = Point(float(lng), float(lat), srid=4326)
+    except (ValueError, TypeError):
+        return Response({'error': 'lat/lng invalides.'}, status=400)
+
+    city_filter = request.query_params.get('city_filter') == 'true'
+
+    if city_filter:
+        nearest_city = (
+            City.objects
+            .annotate(distance=Distance('point_geom', point))
+            .order_by('distance')
+            .first()
+        )
+        if nearest_city:
+            qs = (
+                Property.objects
+                .filter(active=True, city=nearest_city)
+                .annotate(distance=Distance('point_geom', point))
+                .order_by('distance')[:8]
+            )
+        else:
+            qs = Property.objects.none()
+    else:
+        qs = (
+            Property.objects
+            .filter(active=True)
+            .annotate(distance=Distance('point_geom', point))
+            .filter(distance__lte=D(km=20))
+            .order_by('distance')[:8]
+        )
+
+    data = [
+        {
+            'pk': p.pk,
+            'property_name': p.property_name,
+            'distance': round(p.distance.m),
+            'price_per_night': str(p.price_per_night),
+            'city': p.city.city_name if p.city else '',
+        }
+        for p in qs
+    ]
+    return Response(data)
+
+
+# ─────────────────────────────────────────
+# Property Images
+# ─────────────────────────────────────────
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def property_images_upload(request, pk):
+    prop = get_object_or_404(Property, pk=pk, active=True)
+
+    if request.user != prop.owner:
+        return Response({'error': 'You do not have permission to upload images for this property.'}, status=403)
+
+    images = request.FILES.getlist('image')
+    if not images:
+        return Response({'error': 'No images provided.'}, status=400)
+
+    created_images = []
+
+    for image_file in images:
+        if not image_file.content_type.startswith('image/'):
+            continue
+        try:
+            img = PropertyImage.objects.create(property=prop, image=image_file)
+            created_images.append(PropertyImageSerializer(img, context={'request': request}).data)
+        except Exception as e:
+            logger.error(f"[ImageUpload] Failed to save image '{image_file.name}': {e}", exc_info=True)
+            return Response(
+                {'error': f'Failed to save image "{image_file.name}": {str(e)}'},
+                status=500,
+            )
+
+    if not created_images:
+        return Response({'error': 'No valid image files were provided.'}, status=400)
+
+    return Response({'images': created_images}, status=201)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def property_image_delete(request, pk, img_pk):
+    prop = get_object_or_404(Property, pk=pk, active=True)
+
+    if request.user != prop.owner:
+        return Response({'error': 'You do not have permission to delete images for this property.'}, status=403)
+
+    img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
+
+    deleted_name = img.image.name  # Cloudinary public ID / path
+
+    # If this gallery image IS the current cover, clear the cover field first
+    # so the property doesn't keep pointing at a file we're about to remove.
+    if prop.image and prop.image.name == deleted_name:
+        prop.image = None
+        prop.save(update_fields=['image'])
+
+    # Delete the Cloudinary file. django-cloudinary-storage respects this only
+    # when CLOUDINARY_STORAGE['DELETE_UNUSED_FILES'] is True.
+    # We call it anyway; worst case the file stays on Cloudinary but the DB is clean.
+    try:
+        img.image.delete(save=False)
+    except Exception as e:
+        logger.warning(f"[ImageDelete] Cloudinary file deletion failed for {deleted_name}: {e}")
+
+    img.delete()
+    return Response(status=204)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def property_clear_cover(request, pk):
+    """
+    Clears Property.image. If the property has gallery images, automatically
+    promotes the first one to cover so the map and listings always show a photo.
+    Returns the full updated property so the frontend can refresh in one call.
+    """
+    prop = get_object_or_404(Property, pk=pk, active=True)
+    if request.user != prop.owner:
+        return Response({'error': 'Forbidden.'}, status=403)
+
+    prop.image = None
+    prop.save(update_fields=['image'])
+
+    # Auto-promote the first gallery image so callers get a valid cover immediately.
+    first_gallery = prop.images.order_by('id').first()
+    if first_gallery:
+        # Assign the Cloudinary public ID string directly — same as property_set_cover.
+        # Do NOT do: prop.image = first_gallery.image  (copies the File descriptor,
+        # which can cause django-cloudinary-storage to re-upload or lose the reference)
+        prop.image = first_gallery.image.name
+        prop.save(update_fields=['image'])
+        # Bulk-delete: avoids triggering Cloudinary's post-delete signal on the file
+        # we just promoted to cover.
+        PropertyImage.objects.filter(pk=first_gallery.pk).delete()
+
+    serializer = PropertySerializer(prop, context={'request': request})
+    return Response(serializer.data, status=200)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def property_set_cover(request, pk, img_pk):
+    prop = get_object_or_404(Property, pk=pk, active=True)
+
+    if request.user != prop.owner:
+        return Response({'error': 'You do not have permission to edit this property.'}, status=403)
+
+    img = get_object_or_404(PropertyImage, pk=img_pk, property=prop)
+
+    # If a cover already exists and is NOT in the gallery, demote it back into
+    # the gallery so we don't lose it.
+    if prop.image and prop.image.name:
+        cover_name = prop.image.name
+        already_in_gallery = prop.images.filter(image=cover_name).exists()
+        if not already_in_gallery:
+            PropertyImage.objects.create(property=prop, image=cover_name)
+
+    # Promote the gallery image to cover.
+    # IMPORTANT: assign the .name (Cloudinary public ID string) directly to the
+    # ImageField — this is the same technique Django uses internally and preserves
+    # the exact public ID that Cloudinary already knows about.
+    new_cover_name = img.image.name
+    prop.image = new_cover_name
+    prop.save(update_fields=['image'])
+
+    # Use a bulk QuerySet delete so Django does NOT trigger Cloudinary's
+    # post-delete signal, which would physically remove the file we just promoted.
+    PropertyImage.objects.filter(pk=img_pk).delete()
+
+    serializer = PropertySerializer(prop, context={'request': request})
+    return Response(serializer.data, status=200)
+
+# ─────────────────────────────────────────
+# Profile image (current user's avatar)
+# ─────────────────────────────────────────
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def profile_image_upload(request):
+    """Sets/replaces the logged-in user's profile picture."""
+    image_file = request.FILES.get('image')
+    if not image_file:
+        return Response({'error': 'No image provided.'}, status=400)
+    if not image_file.content_type.startswith('image/'):
+        return Response({'error': 'File must be an image.'}, status=400)
+
+    user = request.user
+
+    # Delete the old Cloudinary file (if any) before attaching the new one.
+    if user.profile_image:
+        try:
+            user.profile_image.delete(save=False)
+        except Exception as e:
+            logger.warning(f"[ProfileImage] Cloudinary file deletion failed for {user.username}: {e}")
+
+    try:
+        user.profile_image = image_file
+        user.save(update_fields=['profile_image'])
+    except Exception as e:
+        logger.error(f"[ProfileImage] Failed to save image for {user.username}: {e}", exc_info=True)
+        return Response({'error': f'Failed to save image: {str(e)}'}, status=500)
+
+    profile_image_url = request.build_absolute_uri(user.profile_image.url) if user.profile_image else None
+    return Response({'profileImage': profile_image_url}, status=200)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def profile_image_delete(request):
+    """Removes the logged-in user's profile picture."""
+    user = request.user
+
+    if user.profile_image:
+        try:
+            user.profile_image.delete(save=False)
+        except Exception as e:
+            logger.warning(f"[ProfileImage] Cloudinary file deletion failed for {user.username}: {e}")
+        user.profile_image = None
+        user.save(update_fields=['profile_image'])
+
+    return Response({'profileImage': None}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def profile_me(request):
+    """
+    Returns the full profile of the logged-in user (including fields the
+    login/register endpoints don't send, like bio, location, is_superhost,
+    date_joined). The frontend should call this once on the profile page
+    to hydrate anything missing from the lightweight auth payload.
+    """
+    return Response(UserSerializer(request.user, context={'request': request}).data)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def profile_update(request):
+    """Update the logged-in user's editable profile fields (name, phone, bio, location)."""
+    serializer = UserUpdateSerializer(request.user, data=request.data, partial=True)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=400)
+    serializer.save()
+    return Response(UserSerializer(request.user, context={'request': request}).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_properties(request):
+    """List the logged-in user's own listings (host 'my listings' tab)."""
+    qs = Property.objects.filter(owner=request.user).order_by('-created_at')
+    serializer = PropertySerializer(qs, many=True, context={'request': request})
+    return Response(serializer.data)
+
+
+# ─────────────────────────────────────────
+# Auth
+# ─────────────────────────────────────────
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def register(request):
+    data = request.data
+    for field in ['username', 'email', 'password']:
+        if not data.get(field):
+            return Response({'error': f'Le champ "{field}" est obligatoire.'}, status=400)
+    try:
+        raw_phone = data.get('phone', '')
+        phone_value = raw_phone.strip() if raw_phone else None
+        phone_value = phone_value or None
+
+        user = User.objects.create_user(
+            username=data['username'],
+            email=data['email'],
+            password=data['password'],
+            first_name=data.get('firstName', ''),
+            last_name=data.get('lastName', ''),
+            phone_number=phone_value,
+            role=data.get('role', 'guest'),
+        )
+        token, _ = Token.objects.get_or_create(user=user)
+        return Response({
+            'token': token.key,
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'role': user.role,
+                'firstName': user.first_name,
+                'lastName': user.last_name,
+                'phone': user.phone_number or '',
+                'profileImage': None,
+            }
+        }, status=201)
+    except Exception as e:
+        error_msg = str(e)
+        if 'username' in error_msg and 'already exists' in error_msg:
+            return Response({'error': "Ce nom d'utilisateur est déjà utilisé."}, status=400)
+        if 'phone_number' in error_msg and 'already exists' in error_msg:
+            return Response({'error': 'Ce numéro de téléphone est déjà utilisé.'}, status=400)
+        return Response({'error': error_msg}, status=400)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_view(request):
+    email = request.data.get('email', '').strip()
+    password = request.data.get('password', '')
+    if not email or not password:
+        return Response({'error': 'Email et mot de passe sont obligatoires.'}, status=400)
+    try:
+        user_obj = User.objects.get(email=email)
+        user = authenticate(username=user_obj.username, password=password)
+        if user:
+            token, _ = Token.objects.get_or_create(user=user)
+            profile_image_url = None
+            if user.profile_image:
+                profile_image_url = request.build_absolute_uri(user.profile_image.url)
+            return Response({
+                'token': token.key,
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                    'role': user.role,
+                    'firstName': user.first_name,
+                    'lastName': user.last_name,
+                    'phone': user.phone_number or '',
+                    'profileImage': profile_image_url,
+                }
+            })
+        return Response({'error': 'Mot de passe incorrect.'}, status=400)
+    except User.DoesNotExist:
+        return Response({'error': 'Aucun compte trouvé avec cet email.'}, status=400)
+
+
+# ─────────────────────────────────────────
+# Wishlist
+# ─────────────────────────────────────────
+@api_view(['GET'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def wishlist_list(request):
+    if not request.user.is_authenticated:
+        return Response({'error': 'Authentication required.'}, status=401)
+
+    ids = list(
+        Wishlist.objects
+        .filter(user=request.user)
+        .values_list('property_id', flat=True)
+    )
+    return Response({'favorites': ids})
+
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def wishlist_toggle(request, property_id):
+    if not request.user.is_authenticated:
+        return Response({'error': 'Authentication required.'}, status=401)
+
+    prop = get_object_or_404(Property, pk=property_id, active=True)
+
+    if request.method == 'POST':
+        _, created = Wishlist.objects.get_or_create(user=request.user, property=prop)
+        return Response({'added': True, 'created': created}, status=201 if created else 200)
+
+    deleted, _ = Wishlist.objects.filter(user=request.user, property=prop).delete()
+    return Response({'removed': deleted > 0}, status=200)
+
+
+# ─────────────────────────────────────────
+# Bookings
+# ─────────────────────────────────────────
+def _build_image_url(request, url):
+    if not url:
+        return None
+    if url.startswith('http'):
+        return url
+    return request.build_absolute_uri(url)
+
+
+def _serialize_booking(b, request):
+    return {
+        'id':             b.id,
+        'property_id':    b.property.pk,
+        'property_name':  b.property.property_name,
+        'property_image': _build_image_url(
+            request,
+            b.property.image.url if b.property.image else None
+        ),
+        'property_images': [
+            _build_image_url(request, img.image.url)
+            for img in b.property.images.all() if img.image
+        ],
+        'check_in':    str(b.check_in),
+        'check_out':   str(b.check_out),
+        'total_price': str(b.total_price),
+        'status':      b.status,
+        'created_at':  str(b.created_at),
+    }
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def booking_create(request):
+    if request.method == 'GET':
+        if not request.user or not request.user.is_authenticated:
+            return Response({'error': 'Authentication credentials were not provided.'}, status=401)
+
+        bookings = (
+            Booking.objects
+            .filter(user=request.user)
+            .select_related('property')
+            .prefetch_related('property__images')
+            .order_by('-created_at')
+        )
+        data = [_serialize_booking(b, request) for b in bookings]
+        return Response(data)
+
+    # POST — create a booking
+    property_id = request.data.get('property_id')
+    check_in    = request.data.get('check_in')
+    check_out   = request.data.get('check_out')
+
+    if not property_id or not check_in or not check_out:
+        return Response({'error': 'property_id, check_in et check_out sont requis.'}, status=400)
+
+    prop = get_object_or_404(Property, pk=property_id, active=True)
+
+    if request.user == prop.owner:
+        return Response({'error': 'You cannot book your own property.'}, status=400)
+
+    serializer = BookingSerializer(data={
+        'property': prop.pk,
+        'check_in': check_in,
+        'check_out': check_out,
+    }, context={'request': request})
+
+    if serializer.is_valid():
+        booking = serializer.save(user=request.user, property=prop)
+
+        # ── Notify HOST: new booking request ──
+        create_notification(
+            user=prop.owner,
+            notif_type='booking_request',
+            title=f'New booking request from {request.user.username}',
+            message=(
+                f'{request.user.username} wants to book {prop.property_name} '
+                f'from {check_in} to {check_out}.'
+            ),
+            property_obj=prop,
+            booking_obj=booking,
+        )
+        # ── Notify GUEST: request sent ──
+        create_notification(
+            user=request.user,
+            notif_type='booking_confirmed',
+            title='Booking request sent! ✅',
+            message=(
+                f'Your request for {prop.property_name} '
+                f'from {check_in} to {check_out} '
+                f'has been sent. Waiting for host confirmation.'
+            ),
+            property_obj=prop,
+            booking_obj=booking,
+        )
+
+        return Response(BookingSerializer(booking).data, status=201)
+
+    return Response(serializer.errors, status=400)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def booking_list(request):
+    bookings = (
+        Booking.objects
+        .filter(user=request.user)
+        .select_related('property')
+        .prefetch_related('property__images')
+        .order_by('-created_at')
+    )
+    data = [_serialize_booking(b, request) for b in bookings]
+    return Response(data)
+
+
+# ─────────────────────────────────────────
+# Notifications
+# ─────────────────────────────────────────
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def notification_list(request):
+    try:
+        # Auto-expire: notifications older than 1 month are permanently deleted.
+        one_month_ago = timezone.now() - timedelta(days=30)
+        Notification.objects.filter(
+            user=request.user,
+            created_at__lt=one_month_ago,
+        ).delete()
+
+        notifs = Notification.objects.filter(user=request.user).order_by('-created_at')[:50]
+        serializer = NotificationSerializer(notifs, many=True, context={'request': request})
+        return Response(serializer.data, status=200)
+    except Exception as e:
+        return Response({"error_debug": str(e)}, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def notification_mark_read(request, pk):
+    try:
+        notif = Notification.objects.get(pk=pk, user=request.user)
+        notif.is_read = True
+        notif.save(update_fields=['is_read'])
+        return Response({'status': 'ok'}, status=200)
+    except Notification.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def notification_mark_all_read(request):
+    Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+    return Response({'status': 'ok'}, status=200)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def notification_delete(request, pk):
+    Notification.objects.filter(pk=pk, user=request.user).delete()
+    return Response(status=204)
+
+
+# ─────────────────────────────────────────
+# Property Bookings (host management)
+# ─────────────────────────────────────────
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def property_bookings(request, pk):
+    try:
+        property_obj = Property.objects.get(pk=pk)
+    except Property.DoesNotExist:
+        return Response({'error': 'Property not found'}, status=404)
+
+    if property_obj.owner != request.user:
+        return Response({'error': 'Forbidden'}, status=403)
+
+    # Auto-expire pending bookings older than 48 hours
+    cutoff = timezone.now() - timedelta(hours=48)
+    expired_bookings = list(
+        Booking.objects.filter(
+            property=property_obj,
+            status='pending',
+            created_at__lt=cutoff
+        ).select_related('user')
+    )
+
+    for booking in expired_bookings:
+        Booking.objects.filter(pk=booking.pk).update(status='canceled')
+        create_notification(
+            user=request.user,
+            notif_type='booking_expired',
+            title='Booking request expired',
+            message=f'Booking #{booking.id} from {booking.user.username} expired without response.',
+            property_obj=property_obj,
+            booking_obj=booking,
+        )
+        create_notification(
+            user=booking.user,
+            notif_type='booking_expired',
+            title='Booking request expired',
+            message=f'Your request for {property_obj.property_name} expired — no response within 48 hours.',
+            property_obj=property_obj,
+            booking_obj=booking,
+        )
+
+    bookings = (
+        Booking.objects
+        .filter(property=property_obj)
+        .select_related('user')
+        .order_by('-created_at')
+    )
+
+    data = [
+        {
+            'id': b.id,
+            'user': {'id': b.user.id, 'username': b.user.username},
+            'check_in': str(b.check_in),
+            'check_out': str(b.check_out),
+            'total_price': str(b.total_price),
+            'status': b.status,
+            'created_at': b.created_at.isoformat(),
+        }
+        for b in bookings
+    ]
+    return Response(data)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def booking_update_status(request, pk):
+    try:
+        booking = Booking.objects.select_related('property', 'user').get(pk=pk)
+    except Booking.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+
+    if booking.property.owner != request.user:
+        return Response({'error': 'Forbidden'}, status=403)
+
+    new_status = request.data.get('status', '')
+    allowed = ['confirmed', 'canceled', 'completed']
+    if not new_status or new_status not in allowed:
+        return Response({'error': f'Status must be one of {allowed}'}, status=400)
+
+    # ── Block confirmation if dates overlap with another confirmed/paid booking ──
+    if new_status == 'confirmed':
+        overlap = Booking.objects.filter(
+            property=booking.property,
+            status__in=['confirmed', 'paid'],
+            check_in__lt=booking.check_out,
+            check_out__gt=booking.check_in,
+        ).exclude(pk=pk)
+        if overlap.exists():
+            conflicting = overlap.first()
+            return Response({
+                'error': 'conflict',
+                'message': (
+                    f'This property is already confirmed for '
+                    f'{conflicting.check_in} → {conflicting.check_out}. '
+                    f'You cannot confirm overlapping bookings. '
+                    f'Please cancel one of them first.'
+                ),
+                'conflicting_booking_id': conflicting.pk,
+                'conflicting_check_in': str(conflicting.check_in),
+                'conflicting_check_out': str(conflicting.check_out),
+            }, status=409)
+
+    # Direct DB update — avoids triggering Booking.save() / signal
+    Booking.objects.filter(pk=pk).update(status=new_status)
+    booking.refresh_from_db()
+
+    prop  = booking.property
+    guest = booking.user
+    host  = request.user
+
+    if new_status == 'confirmed':
+        create_notification(
+            user=guest,
+            notif_type='booking_confirmed',
+            title='Booking confirmed! 🎉',
+            message=f'Your reservation at {prop.property_name} ({booking.check_in} → {booking.check_out}) has been confirmed.',
+            property_obj=prop,
+            booking_obj=booking,
+        )
+        create_notification(
+            user=host,
+            notif_type='booking_confirmed',
+            title='You confirmed a booking',
+            message=f'You confirmed the booking from {guest.username} at {prop.property_name}.',
+            property_obj=prop,
+            booking_obj=booking,
+        )
+
+    elif new_status == 'canceled':
+        create_notification(
+            user=guest,
+            notif_type='booking_canceled',
+            title='Booking declined',
+            message=f'Your reservation request at {prop.property_name} was declined by the host.',
+            property_obj=prop,
+            booking_obj=booking,
+        )
+        create_notification(
+            user=host,
+            notif_type='booking_canceled',
+            title='Booking declined',
+            message=f'You declined the reservation from {guest.username}.',
+            property_obj=prop,
+            booking_obj=booking,
+        )
+
+    elif new_status == 'completed':
+        create_notification(
+            user=guest,
+            notif_type='booking_completed',
+            title='Stay completed 🎉',
+            message=f'We hope you enjoyed your stay at {prop.property_name}! Leave a review.',
+            property_obj=prop,
+            booking_obj=booking,
+        )
+        create_notification(
+            user=host,
+            notif_type='booking_completed',
+            title='Stay completed',
+            message=f'{guest.username} has checked out from {prop.property_name}.',
+            property_obj=prop,
+            booking_obj=booking,
+        )
+
+    return Response({'status': new_status})
+
+class ReviewListCreateView(generics.ListCreateAPIView):
+    serializer_class = ReviewSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get_queryset(self):
+        return Review.objects.filter(property_id=self.kwargs['pk'])
+
+    def perform_create(self, serializer):
+        property_obj = Property.objects.get(pk=self.kwargs['pk'])
+        
+        # Double sécurité en amont pour éviter une erreur brute de base de données
+        if Review.objects.filter(property=property_obj, user=self.request.user).exists():
+            raise serializers.ValidationError("Vous avez déjà soumis un avis pour ce logement.")
+            
+        serializer.save(user=self.request.user, property=property_obj)
+
+
+class IsReviewOwner(permissions.BasePermission):
+    """Only the author of the review can edit or delete it. Everyone can read."""
+    def has_object_permission(self, request, view, obj):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return obj.user_id == request.user.id
+
+
+class ReviewDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET/PATCH/PUT/DELETE a single review.
+    Only the review's author may modify or delete it.
+    """
+    serializer_class = ReviewSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly, IsReviewOwner]
+
+    def get_queryset(self):
+        return Review.objects.filter(property_id=self.kwargs['pk'])
+
+    def get_object(self):
+        obj = get_object_or_404(self.get_queryset(), pk=self.kwargs['review_pk'])
+        self.check_object_permissions(self.request, obj)
+        return obj
+
+
+# ─────────────────────────────────────────
+# Crédits & Abonnements
+# ─────────────────────────────────────────
+@api_view(['GET'])
+def subscription_plans(request):
+    plans = SubscriptionPlan.objects.all()
+    return Response(SubscriptionPlanSerializer(plans, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def credit_wallet(request):
+    return Response(CreditWalletSerializer(request.user).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def credit_history(request):
+    qs = CreditTransaction.objects.filter(user=request.user)[:50]
+    return Response(CreditTransactionSerializer(qs, many=True).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def subscribe(request):
+    """
+    body: { "plan_type": "monthly" | "yearly" }
+    ⚠️ Brancher ici le vrai système de paiement (CIB/Edahabia/etc.)
+    AVANT d'appeler add_credit_batch — pour l'instant is_paid=True est
+    posé directement, à remplacer par une confirmation de paiement réelle.
+    """
+    plan_type = request.data.get('plan_type')
+    try:
+        plan = SubscriptionPlan.objects.get(plan_type=plan_type)
+    except SubscriptionPlan.DoesNotExist:
+        return Response({'error': 'Invalid plan'}, status=400)
+
+    with transaction.atomic():
+        sub = Subscription.objects.create(user=request.user, plan=plan, is_paid=True)
+        add_credit_batch(request.user, plan.credits, subscription=sub)
+
+    return Response(CreditWalletSerializer(request.user).data, status=201)
