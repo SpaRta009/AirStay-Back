@@ -113,14 +113,30 @@ WSGI_APPLICATION = 'AirBNB.wsgi.application'
 # Base de données
 # =====================
 
-DATABASES = {
-    'default': dj_database_url.config(
-        default=os.environ.get('DATABASE_URL'),
-        conn_max_age=600,
-        ssl_require=True
-    )
-}
+DATABASE_MODE = os.environ.get('DATABASE_MODE', 'local')
+
+if DATABASE_MODE == 'local':
+    # Local PostgreSQL (no SSL required)
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=os.environ.get('LOCAL_DATABASE_URL', 
+                'postgresql://airbnb_user:password@localhost:5432/airbnb_local'),
+            conn_max_age=600,
+            ssl_require=False
+        )
+    }
+else:
+    # Remote database (Supabase, Railway, etc.) with SSL
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=os.environ.get('REMOTE_DATABASE_URL'),
+            conn_max_age=600,
+            ssl_require=True
+        )
+    }
+
 DATABASES['default']['ENGINE'] = 'django.contrib.gis.db.backends.postgis'
+
 # =====================
 # Auth
 # =====================
