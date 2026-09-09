@@ -62,7 +62,8 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────
 # Helper: create a notification (safe)
 # ─────────────────────────────────────────
-def create_notification(user, notif_type, title, message, property_obj=None, booking_obj=None):
+def create_notification(user, notif_type, title, message, property_obj=None, booking_obj=None,
+                         conversation_obj=None, sender_obj=None):
     try:
         Notification.objects.create(
             user=user,
@@ -71,6 +72,8 @@ def create_notification(user, notif_type, title, message, property_obj=None, boo
             message=message,
             property=property_obj,
             booking=booking_obj,
+            conversation=conversation_obj,
+            sender=sender_obj,
         )
         logger.info(f"[Notif] Created '{notif_type}' for user '{user.username}'")
     except Exception as e:
@@ -1362,6 +1365,20 @@ def conversation_messages(request, pk):
     )
     conversation.save(update_fields=[])  # touche updated_at via auto_now
     Conversation.objects.filter(pk=conversation.pk).update(updated_at=timezone.now())
+
+    # ✅ Notifie le destinataire du message (relié à la conversation pour
+    # que le clic sur la notif ouvre directement le bon fil de discussion).
+    recipient = conversation.other_user(request.user)
+    preview = message.text if len(message.text) <= 80 else message.text[:77] + '…'
+    create_notification(
+        recipient,
+        'new_message',
+        f"New message from {request.user.username}",
+        preview,
+        property_obj=conversation.property,
+        conversation_obj=conversation,
+        sender_obj=request.user,
+    )
 
     return Response(MessageSerializer(message, context={'request': request}).data, status=201)
 

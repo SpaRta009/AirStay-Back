@@ -369,15 +369,20 @@ class BookingSerializer(serializers.ModelSerializer):
         return data
     
 class NotificationSerializer(serializers.ModelSerializer):
-    property_id   = serializers.SerializerMethodField()
-    property_name = serializers.SerializerMethodField()
-    booking_id    = serializers.SerializerMethodField()
+    property_id      = serializers.SerializerMethodField()
+    property_name    = serializers.SerializerMethodField()
+    booking_id       = serializers.SerializerMethodField()
+    conversation_id  = serializers.SerializerMethodField()
+    sender_id        = serializers.SerializerMethodField()
+    sender_username   = serializers.SerializerMethodField()
+    sender_image      = serializers.SerializerMethodField()
  
     class Meta:
         model  = Notification
         fields = (
             'id', 'type', 'title', 'message',
             'property_id', 'property_name', 'booking_id',
+            'conversation_id', 'sender_id', 'sender_username', 'sender_image',
             'is_read', 'created_at',
         )
         read_only_fields = fields
@@ -391,6 +396,24 @@ class NotificationSerializer(serializers.ModelSerializer):
 
     def get_booking_id(self, obj):
         return obj.booking.pk if obj.booking else None
+
+    def get_conversation_id(self, obj):
+        return obj.conversation.pk if obj.conversation else None
+
+    def get_sender_id(self, obj):
+        return obj.sender.pk if obj.sender else None
+
+    def get_sender_username(self, obj):
+        return obj.sender.username if obj.sender else None
+
+    def get_sender_image(self, obj):
+        if not obj.sender or not obj.sender.profile_image:
+            return None
+        url = fix_cloudinary_url(obj.sender.profile_image.url)
+        if url.startswith("http"):
+            return url
+        request = self.context.get("request")
+        return request.build_absolute_uri(url) if request else url
 
 class SubscriptionPlanSerializer(serializers.ModelSerializer):
     class Meta:

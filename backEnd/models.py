@@ -230,6 +230,7 @@ class Notification(models.Model):
         ('checkin_reminder',  'Check-in Reminder'),
         ('checkout_reminder', 'Checkout Reminder'),
         ('booking_paid',      'Booking Paid'),
+        ('new_message',       'New Message'),
     ]
  
     user         = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
@@ -238,6 +239,11 @@ class Notification(models.Model):
     message      = models.TextField()
     property     = models.ForeignKey(Property, on_delete=models.SET_NULL, null=True, blank=True)
     booking      = models.ForeignKey(Booking,  on_delete=models.SET_NULL, null=True, blank=True)
+    # ✅ NEW — pour les notifs de type "new_message" : permet au frontend
+    # d'ouvrir directement la bonne conversation / le bon interlocuteur
+    # sans avoir à chercher la conversation à partir d'autre chose.
+    conversation = models.ForeignKey('Conversation', on_delete=models.SET_NULL, null=True, blank=True, related_name='notifications')
+    sender       = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     is_read      = models.BooleanField(default=False)
     created_at   = models.DateTimeField(auto_now_add=True)
  
