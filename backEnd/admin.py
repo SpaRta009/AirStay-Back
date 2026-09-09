@@ -1,5 +1,5 @@
 from django.contrib.gis import admin
-from .models import Category, Notification, Property, City, Booking, User, PropertyImage, Wishlist, Amenity, Review, SubscriptionPlan, Subscription, CreditBatch, CreditTransaction
+from .models import Category, Notification, Property, City, Booking, User, PropertyImage, Wishlist, Amenity, Review, SubscriptionPlan, Subscription, CreditBatch, CreditTransaction, ChatMessage, ChatConversation
 # Register your models here.
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
@@ -91,3 +91,14 @@ class CreditBatchAdmin(admin.ModelAdmin):
 class CreditTransactionAdmin(admin.ModelAdmin):
     list_display = ['user', 'action', 'amount', 'property', 'created_at']
     list_filter = ['action', 'created_at']
+
+@admin.register(ChatConversation)
+class ChatConversationAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user1', 'user2', 'last_message_time']
+    search_fields = ['user1__username', 'user2__username']
+
+@admin.register(ChatMessage)
+class ChatMessageAdmin(admin.ModelAdmin):
+    list_display = ['id', 'conversation', 'sender', 'message', 'timestamp']
+    search_fields = ['conversation__id', 'sender__username', 'message']
+
