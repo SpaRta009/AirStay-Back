@@ -1353,6 +1353,12 @@ def conversation_messages(request, pk):
         messages = conversation.messages.select_related('sender').order_by('created_at')
         # Marque comme lus les messages reçus (pas les nôtres) au moment de la consultation.
         conversation.messages.filter(is_read=False).exclude(sender=request.user).update(is_read=True)
+        # ✅ Lire les messages d'une conversation doit aussi lire les notifs
+        # "new_message" correspondantes, sinon la cloche reste allumée alors
+        # que la conversation a déjà été consultée.
+        Notification.objects.filter(
+            user=request.user, type='new_message', conversation=conversation, is_read=False
+        ).update(is_read=True)
         return Response(MessageSerializer(messages, many=True, context={'request': request}).data)
 
     # POST → envoyer un message
@@ -1392,4 +1398,7 @@ def conversation_mark_read(request, pk):
         pk=pk,
     )
     updated = conversation.messages.filter(is_read=False).exclude(sender=request.user).update(is_read=True)
+    Notification.objects.filter(
+        user=request.user, type='new_message', conversation=conversation, is_read=False
+    ).update(is_read=True)
     return Response({'marked_read': updated})
