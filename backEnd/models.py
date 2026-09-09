@@ -323,3 +323,66 @@ class CreditTransaction(models.Model):
 
     def __str__(self):
         return f"{self.user.username} {self.action} {self.amount}"
+
+
+# ─────────────────────────────────────────
+# Chat
+# ─────────────────────────────────────────
+class Conversation(models.Model):
+    """
+    Une conversation entre exactement 2 utilisateurs, optionnellement
+    rattachée à une propriété (ex: 'Contacter l'hôte' depuis une annonce).
+    """
+    user_a = models.ForeignKey(User, on_delete=models.CASCADE, related_name='conversations_as_a')
+    user_b = models.ForeignKey(User, on_delete=models.CASCADE, related_name='conversations_as_b')
+    property = models.ForeignKey(Property, on_delete=models.SET_NULL, null=True, blank=True, related_name='conversations')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = 'Conversations'
+        ordering = ['-updated_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user_a', 'user_b', 'property'],
+                name='unique_conversation_per_pair_and_property',
+            )
+        ]
+
+    def clean(self):
+        if self.user_a_id and self.user_b_id and self.user_a_id == self.user_b_id:
+            raise ValidationError("A conversation requires two different users")
+
+    def other_user(self, current_user):
+        return self.user_b if self.user_a_id == current_user.id else self.user_a
+
+    def __str__(self):
+        return f"Conversation #{self.pk} ({self.user_a.username} ↔ {self.user_b.username})"
+
+
+class Message(models.Model):
+    conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name='messages')
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
+    text = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name_plural = 'Messages'
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['conversation', 'created_at']),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        if not self.text or not self.text.strip():
+            raise ValidationError("Message text cannot be empty")
+        if len(self.text) > 4000:
+            raise ValidationError("Message is too long (max 4000 characters)")
+
+    def __str__(self):
+        return f"{self.sender.username}: {self.text[:30]}"

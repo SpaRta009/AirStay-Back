@@ -1,4 +1,4 @@
-from .models import Category, Notification, Property, City, Booking, User, PropertyImage, Amenity, Review, SubscriptionPlan, Subscription, CreditBatch, CreditTransaction
+from .models import Category, Notification, Property, City, Booking, User, PropertyImage, Amenity, Review, SubscriptionPlan, Subscription, CreditBatch, CreditTransaction, Conversation, Message
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 from .credits_utils import get_balance
@@ -419,3 +419,108 @@ class CreditTransactionSerializer(serializers.ModelSerializer):
     class Meta:
         model = CreditTransaction
         fields = ('id', 'action', 'amount', 'property', 'created_at')
+
+
+# ─────────────────────────────
+# Chat
+# ─────────────────────────────
+class ChatUserSerializer(serializers.ModelSerializer):
+    """Petite représentation d'un utilisateur, utilisée dans le contexte du chat."""
+    profile_image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ('id', 'username', 'profile_image')
+
+    def get_profile_image(self, obj):
+        if not obj.profile_image:
+            return None
+        url = fix_cloudinary_url(obj.profile_image.url)
+        if url.startswith("http"):
+            return url
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(url)
+        return url
+
+
+class MessageSerializer(serializers.ModelSerializer):
+    sender = ChatUserSerializer(read_only=True)
+    is_mine = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Message
+        fields = ('id', 'conversation', 'sender', 'text', 'is_read', 'is_mine', 'created_at')
+        read_only_fields = ('id', 'conversation', 'sender', 'is_read', 'is_mine', 'created_at')
+
+    def get_is_mine(self, obj):
+        request = self.context.get("request")
+        return bool(request and request.user.is_authenticated and obj.sender_id == request.user.id)
+
+    def validate_text(self, value):
+        value = (value or '').strip()
+        if not value:
+            raise serializers.ValidationError("Message cannot be empty.")
+        if len(value) > 4000:
+            raise serializers.ValidationError("Message is too long (max 4000 characters).")
+        return value
+
+
+class ConversationSerializer(serializers.ModelSerializer):
+    """
+    Représentation d'une conversation du point de vue de l'utilisateur courant :
+    - `other_user` : l'interlocuteur
+    - `property_id` / `property_name` : contexte optionnel (annonce concernée)
+    - `last_message` : aperçu du dernier message
+    - `unread_count` : nombre de messages non lus envoyés par l'autre utilisateur
+    """
+    other_user = serializers.SerializerMethodField()
+    property_id = serializers.SerializerMethodField()
+    property_name = serializers.SerializerMethodField()
+    last_message = serializers.SerializerMethodField()
+    unread_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Conversation
+        fields = (
+            'id', 'other_user', 'property_id', 'property_name',
+            'last_message', 'unread_count', 'updated_at', 'created_at',
+        )
+        read_only_fields = fields
+
+    def _current_user(self):
+        request = self.context.get("request")
+        return request.user if request else None
+
+    def get_other_user(self, obj):
+        user = self._current_user()
+        other = obj.other_user(user) if user else obj.user_b
+        return ChatUserSerializer(other, context=self.context).data
+
+    def get_property_id(self, obj):
+        return obj.property_id
+
+    def get_property_name(self, obj):
+        return obj.property.property_name if obj.property_id else None
+
+    def get_last_message(self, obj):
+        last = getattr(obj, 'last_message_obj', None)
+        if last is None:
+            last = obj.messages.order_by('-created_at').first()
+        if not last:
+            return None
+        return {
+            'text': last.text,
+            'sender_id': last.sender_id,
+            'created_at': last.created_at.isoformat(),
+            'is_read': last.is_read,
+        }
+
+    def get_unread_count(self, obj):
+        user = self._current_user()
+        if not user:
+            return 0
+        count = getattr(obj, 'unread_count_val', None)
+        if count is not None:
+            return count
+        return obj.messages.filter(is_read=False).exclude(sender=user).count()

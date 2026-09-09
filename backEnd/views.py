@@ -2,6 +2,7 @@ from .models import (
     Property, Category, City, User, Booking, PropertyImage, Wishlist,
     Notification, Amenity, Review,
     SubscriptionPlan, Subscription, CreditBatch, CreditTransaction,
+    Conversation, Message,
 )
 from .serializers import (
     CategorySerializer, CitySerializer, PropertySerializer,
@@ -9,6 +10,7 @@ from .serializers import (
     AmenitySerializer, ReviewSerializer,
     SubscriptionPlanSerializer, CreditWalletSerializer, CreditTransactionSerializer,
     UserSerializer, UserUpdateSerializer,
+    ConversationSerializer, MessageSerializer,
 )
 from .credits_utils import (
     consume_credits, get_balance, add_credit_batch,
@@ -50,6 +52,7 @@ from django.contrib.gis.measure import D
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db import transaction
+from django.db.models import Q, Count, Max
 from datetime import timedelta
 import logging
 
@@ -1241,3 +1244,135 @@ def subscribe(request):
         add_credit_batch(request.user, plan.credits, subscription=sub)
 
     return Response(CreditWalletSerializer(request.user).data, status=201)
+
+
+# ─────────────────────────────────────────
+# Chat
+# ─────────────────────────────────────────
+def _get_or_create_conversation(user, other_user, property_obj=None):
+    if user.id == other_user.id:
+        raise serializers.ValidationError("You cannot start a conversation with yourself.")
+
+    # On range toujours user_a / user_b par pk croissant pour garantir
+    # l'unicité, quel que soit qui initie la conversation.
+    user_a, user_b = (user, other_user) if user.id < other_user.id else (other_user, user)
+
+    conversation, _created = Conversation.objects.get_or_create(
+        user_a=user_a, user_b=user_b, property=property_obj,
+    )
+    return conversation
+
+
+def _annotate_conversations(qs, user):
+    """Attache last_message_obj / unread_count_val pour éviter les requêtes N+1."""
+    conversations = list(qs.select_related('user_a', 'user_b', 'property'))
+    for conv in conversations:
+        conv.last_message_obj = conv.messages.order_by('-created_at').first()
+        conv.unread_count_val = conv.messages.filter(is_read=False).exclude(sender=user).count()
+    return conversations
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def conversation_list(request):
+    """
+    GET /api/chat/conversations/
+    Liste les conversations de l'utilisateur courant, triées par activité récente.
+    """
+    qs = Conversation.objects.filter(
+        Q(user_a=request.user) | Q(user_b=request.user)
+    ).order_by('-updated_at')
+
+    conversations = _annotate_conversations(qs, request.user)
+    # On masque les conversations sans aucun message (créées mais jamais envoyées).
+    conversations = [c for c in conversations if c.last_message_obj is not None]
+
+    serializer = ConversationSerializer(conversations, many=True, context={'request': request})
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def chat_unread_count(request):
+    """GET /api/chat/unread-count/ → { unread_count: <int> }"""
+    count = Message.objects.filter(
+        conversation__in=Conversation.objects.filter(
+            Q(user_a=request.user) | Q(user_b=request.user)
+        ),
+        is_read=False,
+    ).exclude(sender=request.user).count()
+    return Response({'unread_count': count})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def conversation_start(request):
+    """
+    POST /api/chat/start/
+    body: { "user_id": <int>, "property_id": <int, optional> }
+    Récupère (ou crée) la conversation avec `user_id`, éventuellement liée
+    à une propriété, et la retourne sans envoyer de message.
+    """
+    user_id = request.data.get('user_id')
+    if not user_id:
+        return Response({'error': 'user_id is required.'}, status=400)
+
+    other_user = get_object_or_404(User, pk=user_id)
+
+    property_obj = None
+    property_id = request.data.get('property_id')
+    if property_id:
+        property_obj = get_object_or_404(Property, pk=property_id)
+
+    try:
+        conversation = _get_or_create_conversation(request.user, other_user, property_obj)
+    except serializers.ValidationError as e:
+        return Response({'error': str(e.detail[0]) if hasattr(e, 'detail') else str(e)}, status=400)
+
+    conversation.last_message_obj = conversation.messages.order_by('-created_at').first()
+    conversation.unread_count_val = 0
+    return Response(ConversationSerializer(conversation, context={'request': request}).data)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def conversation_messages(request, pk):
+    """
+    GET  /api/chat/conversations/<pk>/messages/  → liste des messages (ordre chronologique)
+    POST /api/chat/conversations/<pk>/messages/  → envoie un message { "text": "..." }
+    """
+    conversation = get_object_or_404(
+        Conversation.objects.filter(Q(user_a=request.user) | Q(user_b=request.user)),
+        pk=pk,
+    )
+
+    if request.method == 'GET':
+        messages = conversation.messages.select_related('sender').order_by('created_at')
+        # Marque comme lus les messages reçus (pas les nôtres) au moment de la consultation.
+        conversation.messages.filter(is_read=False).exclude(sender=request.user).update(is_read=True)
+        return Response(MessageSerializer(messages, many=True, context={'request': request}).data)
+
+    # POST → envoyer un message
+    serializer = MessageSerializer(data=request.data, context={'request': request})
+    serializer.is_valid(raise_exception=True)
+    message = Message.objects.create(
+        conversation=conversation,
+        sender=request.user,
+        text=serializer.validated_data['text'],
+    )
+    conversation.save(update_fields=[])  # touche updated_at via auto_now
+    Conversation.objects.filter(pk=conversation.pk).update(updated_at=timezone.now())
+
+    return Response(MessageSerializer(message, context={'request': request}).data, status=201)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def conversation_mark_read(request, pk):
+    """POST /api/chat/conversations/<pk>/read/ — marque tous les messages reçus comme lus."""
+    conversation = get_object_or_404(
+        Conversation.objects.filter(Q(user_a=request.user) | Q(user_b=request.user)),
+        pk=pk,
+    )
+    updated = conversation.messages.filter(is_read=False).exclude(sender=request.user).update(is_read=True)
+    return Response({'marked_read': updated})

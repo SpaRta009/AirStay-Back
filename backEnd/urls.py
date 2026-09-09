@@ -49,6 +49,13 @@ api_urlpatterns = [
     path("subscriptions/subscribe/", views.subscribe,          name="subscribe"),
     path("credits/wallet/",          views.credit_wallet,      name="credit-wallet"),
     path("credits/history/",         views.credit_history,     name="credit-history"),
+
+    # ✅ Chat
+    path("chat/unread-count/",              views.chat_unread_count,      name="chat-unread-count"),
+    path("chat/conversations/",             views.conversation_list,      name="chat-conversation-list"),
+    path("chat/start/",                     views.conversation_start,     name="chat-conversation-start"),
+    path("chat/conversations/<int:pk>/messages/", views.conversation_messages,  name="chat-conversation-messages"),
+    path("chat/conversations/<int:pk>/read/",     views.conversation_mark_read, name="chat-conversation-read"),
 ]
 
 # ✅ Routes wishlist séparées — exclues de format_suffix_patterns
