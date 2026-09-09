@@ -1,5 +1,22 @@
 from django.contrib.gis import admin
-from .models import Category, Notification, Property, City, Booking, User, PropertyImage, Wishlist, Amenity, Review, SubscriptionPlan, Subscription, CreditBatch, CreditTransaction, ChatMessage, ChatConversation
+from .models import (
+    Category,
+    Notification,
+    Property,
+    City,
+    Booking,
+    User,
+    PropertyImage,
+    Wishlist,
+    Amenity,
+    Review,
+    SubscriptionPlan,
+    Subscription,
+    CreditBatch,
+    CreditTransaction,
+    Conversation,
+    Message,
+)
 # Register your models here.
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
@@ -92,13 +109,39 @@ class CreditTransactionAdmin(admin.ModelAdmin):
     list_display = ['user', 'action', 'amount', 'property', 'created_at']
     list_filter = ['action', 'created_at']
 
-@admin.register(ChatConversation)
-class ChatConversationAdmin(admin.ModelAdmin):
-    list_display = ['id', 'user1', 'user2', 'last_message_time']
-    search_fields = ['user1__username', 'user2__username']
+class MessageInline(admin.TabularInline):
+    model = Message
+    extra = 0
+    fields = ['sender', 'text', 'is_read', 'created_at']
+    readonly_fields = ['created_at']
+    ordering = ['created_at']
 
-@admin.register(ChatMessage)
-class ChatMessageAdmin(admin.ModelAdmin):
-    list_display = ['id', 'conversation', 'sender', 'message', 'timestamp']
-    search_fields = ['conversation__id', 'sender__username', 'message']
+
+@admin.register(Conversation)
+class ConversationAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user_a', 'user_b', 'property', 'created_at', 'updated_at']
+    search_fields = [
+        'user_a__username',
+        'user_a__email',
+        'user_b__username',
+        'user_b__email',
+        'property__property_name',
+    ]
+    list_filter = ['created_at', 'updated_at']
+    readonly_fields = ['created_at', 'updated_at']
+    autocomplete_fields = ['user_a', 'user_b', 'property']
+    inlines = [MessageInline]
+
+
+@admin.register(Message)
+class MessageAdmin(admin.ModelAdmin):
+    list_display = ['id', 'conversation', 'sender', 'text_preview', 'is_read', 'created_at']
+    search_fields = ['conversation__id', 'sender__username', 'sender__email', 'text']
+    list_filter = ['is_read', 'created_at']
+    readonly_fields = ['created_at']
+    autocomplete_fields = ['conversation', 'sender']
+
+    @admin.display(description='Message')
+    def text_preview(self, obj):
+        return obj.text[:80]
 
