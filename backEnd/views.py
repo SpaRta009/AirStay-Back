@@ -692,6 +692,38 @@ def profile_update(request):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
+def profile_detail(request, pk):
+    """
+    Public profile of ANY user (host or guest) — used by the property page's
+    "view host profile" link and by the /profile/<id> route in the frontend.
+
+    Unlike profile_me (auth required, returns only the caller's own record),
+    this is read-only and open to everyone, and additionally exposes
+    aggregate hosting stats (average rating / review count across ALL of
+    that user's active properties, plus their total property count),
+    computed fresh on every call so the numbers shown are always real,
+    never hardcoded placeholders.
+    """
+    try:
+        target = User.objects.get(pk=pk)
+    except (User.DoesNotExist, ValueError):
+        return Response({'error': 'User not found.'}, status=404)
+
+    data = UserSerializer(target, context={'request': request}).data
+
+    from django.db.models import Avg
+    review_qs = Review.objects.filter(property__owner=target)
+    avg = review_qs.aggregate(Avg('rating'))['rating__avg']
+
+    data['average_rating'] = round(avg, 2) if avg else 0.0
+    data['review_count'] = review_qs.count()
+    data['property_count'] = Property.objects.filter(owner=target, active=True).count()
+
+    return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
 def my_properties(request):
     """
     List a host's listings.

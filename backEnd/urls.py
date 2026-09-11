@@ -33,6 +33,7 @@ api_urlpatterns = [
     path("profile/image/delete/",    views.profile_image_delete,     name="profile-image-delete"),
     path("profile/me/",              views.profile_me,               name="profile-me"),
     path("profile/update/",          views.profile_update,           name="profile-update"),
+    path("profile/<int:pk>/",        views.profile_detail,           name="profile-detail"),
     path("properties/mine/",         views.my_properties,            name="my-properties"),
     path("bookings/",                views.booking_create,           name="booking-create"),
     path("bookings/list/",           views.booking_list,             name="booking-list"),
